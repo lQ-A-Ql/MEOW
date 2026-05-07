@@ -1,6 +1,8 @@
-# meow - Vol3 Linux Symbol Builder
+# MEOW~
 
-`meow` 是面向 Windows 用户的 Volatility 3 Linux 符号表生成工具。它从 Linux kernel banner、内存镜像、本地 debug package 或本地 vmlinux 出发，优先查询开源远程 ISF 符号库；未命中时再定位服务器常见发行版的 debug symbol 包，并通过 WSL 调用 `dpkg-deb`/`rpm2cpio`、`dwarf2json`、`xz`，生成 Volatility 3 可用的 `.json.xz`。
+制作vol3的linux符号表的小工具喵，小猫怕你觉得麻烦于是把符号表叼给你啦
+
+![image-20260507212825558](https://raw.githubusercontent.com/lQ-A-Ql/blog-image/main/image-20260507212825558.png)
 
 ## 支持范围
 
