@@ -1,37 +1,35 @@
 # MEOW~
 
-制作vol3的linux符号表的小工具喵，小猫怕你觉得麻烦于是把符号表叼给你啦
-
-![image-20260507212825558](https://raw.githubusercontent.com/lQ-A-Ql/blog-image/main/image-20260507212825558.png)
+制作 Volatility 3 Linux 符号表的小工具喵。  
+当前版本已重构为 **Linux 原生运行**，不再调用 `wsl.exe`。
 
 ## 支持范围
 
-MVP 支持：
-
-- 远程 ISF：读取 `%USERPROFILE%\.meow\symbol-sources.txt`，默认查询 Abyss-W4tcher 开源符号库
-- Ubuntu 18.04 / 20.04 / 22.04 / 24.04：远程 ISF 优先；未命中则自动解析并探测 `ddebs.ubuntu.com`
-- Debian stable / oldstable 常见 amd64 kernel：远程 ISF 优先；未命中则自动解析并生成 `linux-image-<release>-dbg_<pkgver>_<arch>.deb` 候选
-- RHEL / CentOS / Rocky / Alma / Fedora / openSUSE 常见服务器 banner：远程 ISF 优先；未命中则支持 `--repo-url`、`--vmlinux` 或手工 `.rpm` debug package 构建
-- amd64 / x86_64
-- WSL 后端
-- 输入方式：banner、banner 文件、memdump、本地 `.ddeb/.deb/.rpm`、本地 vmlinux、手工 kernel/pkgver
+- 运行环境：Linux（包括你在 WSL 发行版内直接运行 `./meow`）
+- 输入方式：终端粘贴 banner、`--banner-file`、`--mem`、`--debug-package`、`--debug-package-url`、`--vmlinux`
+- 远程 ISF：读取 `$HOME/.meow/symbol-sources.txt`，默认查询 Abyss-W4tcher 开源符号库
+- Ubuntu：远程 ISF 未命中时自动探测 `.ddeb`
+- Debian：远程 ISF 未命中时自动生成 `.deb` 候选并探测
+- RHEL/CentOS/Rocky/Alma/Fedora/openSUSE：远程 ISF 优先；未命中时支持 `--repo-url`、`--debug-package`、`--debug-package-url`、`--vmlinux`
 
 暂不支持：
 
-- Native Windows 完整后端
-- 内置推断闭源/订阅 RPM 仓库地址
-- 自编译 kernel、Android kernel、嵌入式 kernel
-- ARM / MIPS / PowerPC
-- GUI、上传功能
-- 没有 debug symbol 或 vmlinux 时的符号恢复
+- Windows 原生执行构建链路（非 Linux 会直接报错）
+- 订阅/闭源仓库自动推断与绕过授权下载
+- 无 debug package / 无 vmlinux 的符号恢复
 
-## WSL 依赖
+## Linux 依赖
 
-WSL 内需要：
+`doctor` 和构建链路需要以下工具：
 
 ```bash
 sudo apt update
-sudo apt install -y dpkg tar xz-utils curl rpm2cpio cpio gzip zstd
+sudo apt install -y dpkg-dev xz-utils rpm2cpio cpio gzip zstd tar
+```
+
+`dwarf2json` 需要可执行并在 PATH 中：
+
+```bash
 git clone https://github.com/volatilityfoundation/dwarf2json
 cd dwarf2json
 go build -o dwarf2json
@@ -40,98 +38,68 @@ sudo cp dwarf2json /usr/local/bin/
 
 检查环境：
 
-```powershell
-.\meow.exe doctor
+```bash
+./meow doctor
 ```
 
 ## 快速开始
 
-```powershell
-.\meow.exe doctor
-.\meow.exe parse
-.\meow.exe build --backend wsl --out .\symbols\linux
-.\meow.exe verify --mem .\memdump.mem --symbols .\symbols
+```bash
+./meow doctor
+./meow parse
+./meow build --out ./symbols/linux
+./meow verify --mem ./memdump.mem --symbols ./symbols
 ```
 
-`parse` 和默认 `build` 会在终端提示粘贴 Linux kernel banner，粘贴后按 Enter。
+`parse` 和默认 `build` 会提示在终端粘贴 Linux kernel banner，粘贴后按 Enter。
 
-## 解析 banner
+## 常用命令
 
-```powershell
-.\meow.exe parse
-```
+只解析，不下载不构建：
 
-JSON 输出可配合管道：
-
-```powershell
-Get-Clipboard | .\meow.exe --json parse
-```
-
-远程符号源默认启用。`parse --json` 会显示 `symbol_sources_path`、`symbol_sources`、`remote_symbol_candidates`、`support_level`。
-
-## 从 banner 生成
-
-```powershell
-.\meow.exe build --backend wsl --out .\symbols\linux
-```
-
-命令会提示在终端粘贴 Linux kernel banner，粘贴后按 Enter。
-
-构建流程先查远程 ISF。若远程符号库已有匹配的 `.json.xz`，会直接下载到 `symbols/linux/`，不再下载 debug package。远程未命中时，Ubuntu/Debian 继续走 debug package 自动候选。
-
-ddeb/deb/rpm 包通常很大，慢网络可拉长下载超时：
-
-```powershell
-.\meow.exe build --backend wsl --download-timeout 2h --out .\symbols\linux
-```
-
-如果卡在 “探测包” 阶段，可拉长探测总超时：
-
-```powershell
-.\meow.exe build --backend wsl --probe-timeout 2m --download-timeout 2h --out .\symbols\linux
-```
-
-普通模式会在下载时显示实际百分比；进入 WSL 后，会用整体构建进度显示解包、`dwarf2json` 与压缩阶段。解包时会额外显示第二条进度，按 debug package 内文件计数展示当前文件解包进度。进度条尖端是短稳定的 ASCII 像素小猫；JSON 模式不显示进度，保证 stdout 是纯 JSON。
-
-```text
-[*] 探测包        [==========^..^=__/         ] 1/3 linux-image-unsigned-5.4.0-163-generic-dbgsym_5.4.0-163.180_amd64.ddeb
-[*] 下载中         [==========^..^=__/         ]  39.4% 356.2 MB / 904.1 MB
-[*] 构建符号       [==^..^=__/                       ]   8.0% 解包调试包
-    解包文件       [=============^..^=__/            ] 24/61 ./usr/lib/debug/boot/vmlinux-5.4.0-163-generic
-[*] 构建符号       [======^..^=__\                  ]  22.0% 运行 dwarf2json
-[*] 构建符号       [========================^..^=__~]  97.0% 压缩 ISF
-```
-
-只解析、不下载、不生成：
-
-```powershell
-.\meow.exe build --dry-run
+```bash
+./meow build --dry-run
 ```
 
 JSON 输出：
 
-```powershell
-.\meow.exe --json build --dry-run
+```bash
+./meow --json parse --banner-file ./testdata/banners/ubuntu_5.4.0_163.txt
+./meow --json build --dry-run --banner-file ./testdata/banners/ubuntu_5.4.0_163.txt
 ```
 
-禁用远程 ISF：
+禁用远程符号库：
 
-```powershell
-.\meow.exe build --no-remote-symbols --dry-run
+```bash
+./meow build --no-remote-symbols --dry-run
 ```
 
 指定符号源 TXT：
 
-```powershell
-.\meow.exe build --symbol-sources C:\path\symbol-sources.txt
+```bash
+./meow build --symbol-sources /path/to/symbol-sources.txt
+```
+
+## 构建流程说明
+
+`build` 流程优先级：
+
+1. 远程 ISF（命中则直接下载 `.json.xz`，停止后续下载 debug package）
+2. 手工 URL（`--debug-package-url` / 兼容别名 `--ddeb-url`）
+3. `--repo-url`（RPM repo metadata 精确查找）
+4. 按发行版候选自动探测（Ubuntu/Debian）
+5. 手工包或本地 vmlinux 兜底
+
+下载与探测超时可调：
+
+```bash
+./meow build --probe-timeout 2m --download-timeout 2h --out ./symbols/linux
 ```
 
 ## 从内存镜像生成
 
-需要本机可执行 `vol`：
-
-```powershell
-.\meow.exe build --mem .\memdump.mem --backend wsl --out .\symbols\linux
+```bash
+./meow build --mem ./memdump.mem --out ./symbols/linux
 ```
 
 工具会调用：
@@ -140,190 +108,135 @@ JSON 输出：
 vol -f memdump.mem banners.Banners
 ```
 
-然后提取 Linux banner 并进入自动构建流程。
+然后进入同一套自动解析与构建流程。
 
-## 手工指定参数
+## 手工输入模式
 
-```powershell
-.\meow.exe build `
-  --distro ubuntu `
-  --kernel 5.4.0-163-generic `
-  --pkgver 5.4.0-163.180 `
-  --arch amd64 `
-  --backend wsl
+提供本地 debug package：
+
+```bash
+./meow build --debug-package ./linux-image-unsigned-5.4.0-163-generic-dbgsym_5.4.0-163.180_amd64.ddeb
+./meow build --debug-package ./linux-image-5.10.0-35-amd64-dbg_5.10.237-1_amd64.deb
+./meow build --debug-package ./kernel-debuginfo-4.18.0-513.5.1.el8_9.x86_64.rpm
 ```
 
-## Debian / 服务器发行版
+本地包名无法推断 kernel/pkgver 时，补齐参数：
 
-```powershell
-.\meow.exe parse
-.\meow.exe build --dry-run
+```bash
+./meow build \
+  --debug-package ./kernel-debug-package.deb \
+  --kernel 5.10.0-35-amd64 \
+  --pkgver 5.10.237-1 \
+  --arch amd64 \
+  --distro debian
 ```
 
-Debian banner 会生成类似候选：
+提供本地 vmlinux：
 
-```text
-https://deb.debian.org/debian/pool/main/l/linux/linux-image-5.10.0-35-amd64-dbg_5.10.237-1_amd64.deb
+```bash
+./meow build --vmlinux ./vmlinux-5.4.0-163-generic --out ./symbols/linux
 ```
 
-Debian 仓库会滚动，旧安全内核可能已从当前 pool 移走。遇到 404 时，使用 `snapshot.debian.org` 找到对应 `.deb` 后传：
+兼容别名：
 
-```powershell
-.\meow.exe build --ddeb-url <debian-debug-package-url> --backend wsl
+- `--ddeb` == `--debug-package`
+- `--ddeb-url` == `--debug-package-url`
+
+## RPM 系说明
+
+RHEL/CentOS/Rocky/Alma/Fedora/openSUSE 未命中远程 ISF 时：
+
+- 可用 `--repo-url`（需包含 `repodata/repomd.xml`）
+- 或直接 `--debug-package`
+- 或 `--vmlinux`
+
+示例：
+
+```bash
+./meow build --repo-url https://mirror.example.org/debug/os/x86_64/ --dry-run
+./meow build --debug-package ./kernel-debuginfo-4.18.0-513.5.1.el8_9.x86_64.rpm
 ```
 
-RHEL/CentOS/Rocky/Alma/Fedora/openSUSE 当前优先查远程 ISF，不内置闭源或订阅仓库。若你有公开或内网 RPM repo base，可传 `--repo-url`，工具会读取 `repodata/repomd.xml` 和 primary metadata 精确找 `kernel-debuginfo`：
-
-```powershell
-.\meow.exe build --repo-url https://mirror.example.org/debug/os/x86_64/ --backend wsl
-```
-
-远程未命中且无 repo 时，可从目标系统或发行版仓库取得 `vmlinux`：
-
-```powershell
-.\meow.exe build --vmlinux .\vmlinux-4.18.0-513.5.1.el8_9.x86_64 --distro rhel --out .\symbols\linux
-```
-
-也可提供本地 RPM debuginfo：
-
-```powershell
-.\meow.exe build --debug-package .\kernel-debuginfo-4.18.0-513.5.1.el8_9.x86_64.rpm --backend wsl
-```
-
-## 从本地 debug package 生成
-
-```powershell
-.\meow.exe build --debug-package .\linux-image-unsigned-5.4.0-163-generic-dbgsym_5.4.0-163.180_amd64.ddeb --backend wsl
-.\meow.exe build --debug-package .\linux-image-5.10.0-35-amd64-dbg_5.10.237-1_amd64.deb --backend wsl
-.\meow.exe build --debug-package .\kernel-debuginfo-4.18.0-513.5.1.el8_9.x86_64.rpm --backend wsl
-```
-
-如果文件名无法推断 kernel/pkgver，补充：
-
-```powershell
-.\meow.exe build --debug-package .\kernel-debug-package.deb --kernel 5.10.0-35-amd64 --pkgver 5.10.237-1 --arch amd64 --distro debian
-```
-
-`--ddeb` / `--ddeb-url` 仍保留为兼容别名；新命令建议使用 `--debug-package` / `--debug-package-url`。
-
-## 从本地 vmlinux 生成
-
-```powershell
-.\meow.exe build --vmlinux .\vmlinux-5.4.0-163-generic --out .\symbols\linux
-```
-
-这个模式不访问网络。
-
-## 缓存
-
-查看缓存目录：
-
-```powershell
-.\meow.exe cache path
-```
-
-列出下载缓存：
-
-```powershell
-.\meow.exe cache list
-```
-
-清理缓存：
-
-```powershell
-.\meow.exe cache clear
-```
-
-## 配置
+## 配置与符号源
 
 查看默认配置：
 
-```powershell
-.\meow.exe config show
+```bash
+./meow config show
 ```
 
-创建配置文件：
+初始化配置：
 
-```powershell
-.\meow.exe config init
+```bash
+./meow config init
 ```
 
 默认路径：
 
 ```text
-%USERPROFILE%\.meow\config.json
-%USERPROFILE%\.meow\symbol-sources.txt
+$HOME/.meow/config.json
+$HOME/.meow/symbol-sources.txt
 ```
 
-`%USERPROFILE%\.meow` 是当前默认配置目录。若你之前使用过旧版 `%USERPROFILE%\.volsym`，需要手工复制 `config.json`、`symbol-sources.txt` 或缓存文件到 `.meow`。
-
-`config init` 会同时写出 `config.json` 和 `symbol-sources.txt`。符号源 TXT 一行一个源，支持 `#` 注释和空行：
+`symbol-sources.txt` 格式（一行一个源）：
 
 ```text
 # name|index_url|raw_base_url
 abyss|https://raw.githubusercontent.com/Abyss-W4tcher/volatility3-symbols/master/banners/banners_plain.json|https://raw.githubusercontent.com/Abyss-W4tcher/volatility3-symbols/master/
 ```
 
+若你历史使用过 `%USERPROFILE%\\.volsym`，请手工迁移 `config.json`、`symbol-sources.txt` 和缓存到新目录 `$HOME/.meow`。
+
+## 缓存
+
+```bash
+./meow cache path
+./meow cache list
+./meow cache clear
+```
+
 ## 给 Volatility 3 使用
 
-生成结果应位于：
+生成结果示例：
 
 ```text
 symbols/linux/Ubuntu_5.4.0-163-generic_5.4.0-163.180_amd64.json.xz
 ```
 
-执行：
+运行：
 
-```powershell
-vol -f .\memdump.mem -s .\symbols linux.pslist.PsList
+```bash
+vol -f ./memdump.mem -s ./symbols linux.pslist.PsList
 ```
 
 注意 `-s` 指向 `symbols` 父目录，不是 `symbols/linux`。
 
 ## 常见错误
 
-### 未找到 debug package
+### `当前版本仅支持 Linux 原生运行`
 
-可能原因：
+你在非 Linux 平台直接执行了构建链路。请在 Linux 环境运行（例如 WSL 发行版 shell 内执行 Linux 二进制）。
 
-- banner 对应发行版当前不支持自动定位。
-- debug package 被仓库清理或迁移。
-- 包版本解析结果不正确。
+### 未找到对应 debug package
 
-处理：
+常见原因：
 
-```powershell
-.\meow.exe build --ddeb-url <url> ...
-.\meow.exe build --ddeb .\local.ddeb ...
-.\meow.exe build --vmlinux .\vmlinux-...
-```
+- 发行版仓库已滚动清理旧包
+- banner 不属于当前支持自动探测范围
+- 包版本解析与实际仓库不一致
 
-### WSL 不可用
-
-执行：
-
-```powershell
-wsl --install
-.\meow.exe doctor
-```
-
-### 未找到 dwarf2json
-
-在 WSL 内安装并复制到 PATH：
+处理方式：
 
 ```bash
-git clone https://github.com/volatilityfoundation/dwarf2json
-cd dwarf2json
-go build -o dwarf2json
-sudo cp dwarf2json /usr/local/bin/
+./meow build --debug-package-url <url> ...
+./meow build --debug-package ./local-package.rpm ...
+./meow build --vmlinux ./vmlinux-... ...
 ```
 
-### Volatility 3 无法加载符号
+### 未找到 `dwarf2json`
 
-检查：
+确认 `dwarf2json` 在 PATH：
 
-- `-s` 是否指向 `symbols` 父目录。
-- `.json.xz` 是否在 `symbols/linux/` 下。
-- banner 是否与内存镜像匹配。
-- 是否需要清理 Volatility 3 缓存。
-
+```bash
+command -v dwarf2json
+```

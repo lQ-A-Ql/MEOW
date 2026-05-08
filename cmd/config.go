@@ -12,8 +12,6 @@ import (
 )
 
 type configFile struct {
-	Backend                string `json:"backend"`
-	WSLDistro              string `json:"wsl_distro"`
 	CacheDir               string `json:"cache_dir"`
 	OutputDir              string `json:"output_dir"`
 	SymbolSourcesPath      string `json:"symbol_sources_path"`
@@ -55,8 +53,6 @@ func runConfig(args []string) {
 			printJSON(cfg)
 			return
 		}
-		fmt.Printf("backend: %s\n", cfg.Backend)
-		fmt.Printf("wsl_distro: %s\n", cfg.WSLDistro)
 		fmt.Printf("cache_dir: %s\n", cfg.CacheDir)
 		fmt.Printf("output_dir: %s\n", cfg.OutputDir)
 		fmt.Printf("symbol_sources_path: %s\n", cfg.SymbolSourcesPath)
@@ -106,7 +102,6 @@ func defaultConfigPath() string {
 
 func defaultConfig() configFile {
 	return configFile{
-		Backend:                "wsl",
 		CacheDir:               cachepkg.DefaultDir(),
 		OutputDir:              filepath.Join(".", "symbols", "linux"),
 		SymbolSourcesPath:      sourcespkg.DefaultPath(),

@@ -1,0 +1,1 @@
+Linux version 4.18.0-513.5.1.el8_9.x86_64 (mockbuild@x86-01.mbox.centos.org) #1 SMP

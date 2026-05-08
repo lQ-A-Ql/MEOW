@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "codex/**"
+  pull_request:
+
+jobs:
+  test-build-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev xz-utils rpm2cpio cpio zstd gzip tar
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Build meow
+        run: go build -o meow .
+
+      - name: Smoke parse (no remote)
+        run: ./meow --json parse --banner-file ./testdata/banners/ubuntu_5.4.0_163.txt --no-remote-symbols
+
+      - name: Smoke build dry-run Ubuntu (no remote)
+        run: ./meow --json build --dry-run --banner-file ./testdata/banners/ubuntu_5.4.0_163.txt --no-remote-symbols
+
+      - name: Smoke build dry-run RPM-family (no remote)
+        run: ./meow --json build --dry-run --banner-file ./testdata/banners/centos_4.18.0_513.txt --no-remote-symbols

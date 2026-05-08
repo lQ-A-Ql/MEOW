@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -30,8 +31,6 @@ var (
 	buildPkgver          string
 	buildDistro          string
 	buildArch            string
-	buildBackend         string
-	buildWslDistro       string
 	buildOut             string
 	buildCacheDir        string
 	buildDDEB            string
@@ -83,8 +82,6 @@ func init() {
 	fs.StringVar(&buildPkgver, "pkgver", "", "包版本，例如 5.4.0-163.180")
 	fs.StringVar(&buildDistro, "distro", "", "发行版；默认从 banner/文件名推断，手工模式默认 ubuntu")
 	fs.StringVar(&buildArch, "arch", "amd64", "架构")
-	fs.StringVar(&buildBackend, "backend", "wsl", "后端: wsl/native")
-	fs.StringVar(&buildWslDistro, "wsl-distro", "", "WSL 发行版名称，空则使用默认")
 	fs.StringVar(&buildOut, "out", filepath.Join(".", "symbols", "linux"), "输出目录")
 	fs.StringVar(&buildCacheDir, "cache-dir", cachepkg.DefaultDir(), "缓存目录")
 	fs.StringVar(&buildDDEB, "ddeb", "", "本地 debug package 路径，支持 .ddeb/.deb")
@@ -131,11 +128,8 @@ func runBuild(args []string) {
 }
 
 func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
-	if buildBackend == "" {
-		buildBackend = "wsl"
-	}
-	if buildBackend != "wsl" {
-		return nil, fmt.Errorf("native backend 尚未支持；MVP 请使用 --backend wsl")
+	if runtime.GOOS != "linux" {
+		return nil, fmt.Errorf("当前版本仅支持 Linux 原生运行")
 	}
 	if !jsonMode {
 		log.Info("准备构建符号表")
@@ -184,7 +178,7 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		Kernel:         info.KernelRelease,
 		PackageVersion: info.PackageVersion,
 		Arch:           info.Arch,
-		Backend:        buildBackend,
+		Backend:        "linux_native",
 		OutputDir:      buildOut,
 		SymbolPath:     symbolPath,
 		PackagePath:    sourcePackage,
@@ -249,15 +243,15 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		stageUpdate = stageProgress.Update
 		extractUpdate = stageProgress.UpdateExtract
 	}
-	wsl := backendpkg.WSL{Distro: buildWslDistro, Verbose: log.Verbose, Stage: stageUpdate, Extract: extractUpdate}
+	native := backendpkg.Native{Verbose: log.Verbose, Stage: stageUpdate, Extract: extractUpdate}
 
 	if buildVMLINUX != "" {
 		if !jsonMode {
 			log.Info("从本地 vmlinux 生成符号表")
 		}
-		out, err := wsl.BuildFromVMLINUX(ctx, req)
+		out, err := native.BuildFromVMLINUX(ctx, req)
 		if err != nil {
-			return summary, fmt.Errorf("WSL vmlinux 构建失败: %w", err)
+			return summary, fmt.Errorf("Linux vmlinux 构建失败: %w", err)
 		}
 		summary.SymbolPath = out.SymbolPath
 		summary.VmlinuxPath = out.VmlinuxPath
@@ -269,11 +263,11 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		return summary, fmt.Errorf("缺少 debug package 输入；可使用 --debug-package、--debug-package-url、--ddeb、--ddeb-url、--banner 或 --banner-file")
 	}
 	if !jsonMode {
-		log.Info("通过 WSL 解包 debug package 并运行 dwarf2json")
+		log.Info("解包 debug package 并运行 dwarf2json")
 	}
-	out, err := wsl.BuildFromDDEB(ctx, req)
+	out, err := native.BuildFromDebugPackage(ctx, req)
 	if err != nil {
-		return summary, fmt.Errorf("WSL ddeb 构建失败: %w", err)
+		return summary, fmt.Errorf("Linux debug package 构建失败: %w", err)
 	}
 	summary.SymbolPath = out.SymbolPath
 	summary.VmlinuxPath = out.VmlinuxPath
@@ -498,7 +492,7 @@ func partialSummary(info bannerpkg.KernelInfo, candidates []string, foundURL, sy
 		Kernel:         info.KernelRelease,
 		PackageVersion: info.PackageVersion,
 		Arch:           info.Arch,
-		Backend:        buildBackend,
+		Backend:        "linux_native",
 		OutputDir:      buildOut,
 		SymbolPath:     symbolPath,
 		FoundURL:       foundURL,

@@ -698,3 +698,50 @@
 
 - 旧 `%USERPROFILE%\.volsym` 配置和缓存不会自动迁移；README 已说明需手工复制到 `.meow`。
 - PRD 仍保留最初项目名 `volsym` 作为历史需求文档，未批量改写。
+
+## 2026-05-08 17:56 CST - Codex
+
+### 文档评审
+
+- 本轮开始已读取 `docs/development-log.md`、`README.md` 与当前 `cmd/internal` 代码。
+- 评审结论：当前文档和实现仍大量描述 WSL 透传模型（`--backend` / `--wsl-distro` / `wsl.exe`），与本轮“仅 Linux 原生运行”决策冲突，需要整体迁移。
+
+### 当前改动
+
+- 后端重构为 Linux 原生执行：
+  - 删除 `internal/backend/wsl.go` 与对应测试。
+  - 新增 `internal/backend/native.go`、`internal/backend/native_test.go`。
+  - `build/doctor` 不再调用 `wsl.exe`，改为 `bash --noprofile --norc -c` 本机执行。
+  - 保留阶段与解包进度 marker 协议：`VOLSYM_STAGE` / `VOLSYM_EXTRACT_*`，现有双进度条逻辑无需改动。
+- CLI 破坏性变更（按锁定决策）：
+  - 从 `build`/`doctor` 移除 `--backend`、`--wsl-distro`。
+  - 非 Linux 平台在 `build` 与 `doctor` 入口统一快速失败：`当前版本仅支持 Linux 原生运行`。
+  - `build` JSON 中 `backend` 固定为 `linux_native`。
+- 配置变更：
+  - `config` 结构与 `show/init` 输出删除 `backend`、`wsl_distro` 字段。
+  - 保留 `cache_dir`、`output_dir`、`symbol_sources_path`、`volatility_path` 等有效项。
+- CI 基线接入：
+  - 新增 `.github/workflows/ci.yml`（`ubuntu-latest`）。
+  - 固定执行：依赖安装、`go test ./...`、`go build -o meow .`、3 条 `--no-remote-symbols` smoke（parse / Ubuntu dry-run / RPM-family dry-run）。
+- 文档迁移：
+  - `README.md` 全量改为 Linux 原生语义，去除 WSL 专属命令和排障路径。
+  - 命令示例统一移除 `--backend wsl`。
+
+### 测试
+
+- Windows 本地编译与单测：
+  - `go test ./...`
+  - `go build -o meow.exe .`
+- Linux 语义 smoke（在 WSL Ubuntu 内执行 Linux 二进制）：
+  - `./meow --json parse --banner-file ./testdata/banners/ubuntu_5.4.0_163.txt --no-remote-symbols`
+  - `./meow --json build --dry-run --banner-file ./testdata/banners/ubuntu_5.4.0_163.txt --no-remote-symbols`
+  - `./meow --json build --dry-run --banner-file ./testdata/banners/centos_4.18.0_513.txt --no-remote-symbols`
+- CLI 兼容性验证：
+  - `meow build --help` / `meow doctor --help` 已无 `--backend`、`--wsl-distro`。
+  - 新增 `cmd/command_flags_test.go` 断言旧参数已移除。
+
+### 后续风险
+
+- 旧自动化脚本若仍传 `--backend` 或 `--wsl-distro` 将直接报 `flag provided but not defined`，需要手工迁移脚本参数。
+- CI 当前按方案只做单元与干跑烟测，不覆盖真实大包下载/解包/`dwarf2json` 全链路。
+- `winres` 与 Windows 图标资源文件仍保留在仓库中，但不纳入 Linux CI 运行路径。
