@@ -344,23 +344,26 @@ func (m Model) View() string {
 	logo := m.buildLogo()
 	left := m.buildLeftPanel()
 	right := m.buildRightPanel()
+	bar := m.buildBar()
 
-	// Measure actual rendered widths (includes border + padding)
+	// Measure actual rendered sizes
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
+	logoH := lipgloss.Height(logo)
+	barH := lipgloss.Height(bar)
 
-	// Center fills remaining space
+	// Center fills remaining width
 	centerW := m.width - leftW - rightW
 	if centerW < 10 {
 		centerW = 10
 	}
 
-	// Viewport = center content area minus border(2)
-	vpW := centerW - 2
-	vpH := m.height - 8 - 3 - 2 // logo - bar - border
+	// Viewport fills remaining height (center has 2 border rows)
+	vpH := m.height - logoH - barH - 2
 	if vpH < 1 {
 		vpH = 1
 	}
+	vpW := centerW - 2
 	if vpW < 1 {
 		vpW = 1
 	}
@@ -368,7 +371,6 @@ func (m Model) View() string {
 	m.vp.Height = vpH
 
 	center := m.buildCenterPanel(centerW, vpW, vpH)
-	bar := m.buildBar()
 
 	main := lipgloss.JoinHorizontal(lipgloss.Top, left, center, right)
 	return lipgloss.JoinVertical(lipgloss.Left, logo, main, bar)
