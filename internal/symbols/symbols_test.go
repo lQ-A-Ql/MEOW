@@ -20,7 +20,7 @@ func TestFileName(t *testing.T) {
 }
 
 func TestInferFromDDEB(t *testing.T) {
-	info, ok := InferFromDDEB(`C:\tmp\linux-image-unsigned-5.4.0-163-generic-dbgsym_5.4.0-163.180_amd64.ddeb`)
+	info, ok := InferFromDDEB("/tmp/linux-image-unsigned-5.4.0-163-generic-dbgsym_5.4.0-163.180_amd64.ddeb")
 	if !ok {
 		t.Fatal("expected inference success")
 	}
@@ -30,7 +30,7 @@ func TestInferFromDDEB(t *testing.T) {
 }
 
 func TestInferFromDDEB_Debian(t *testing.T) {
-	info, ok := InferFromDDEB(`C:\tmp\linux-image-5.10.0-35-amd64-dbg_5.10.237-1_amd64.deb`)
+	info, ok := InferFromDDEB("/tmp/linux-image-5.10.0-35-amd64-dbg_5.10.237-1_amd64.deb")
 	if !ok {
 		t.Fatal("expected inference success")
 	}
@@ -40,7 +40,7 @@ func TestInferFromDDEB_Debian(t *testing.T) {
 }
 
 func TestInferFromDDEB_RPM(t *testing.T) {
-	info, ok := InferFromDDEB(`C:\tmp\kernel-debuginfo-4.18.0-513.5.1.el8_9.x86_64.x86_64.rpm`)
+	info, ok := InferFromDDEB("/tmp/kernel-debuginfo-4.18.0-513.5.1.el8_9.x86_64.x86_64.rpm")
 	if !ok {
 		t.Fatal("expected inference success")
 	}
