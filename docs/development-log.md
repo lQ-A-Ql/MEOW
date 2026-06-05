@@ -776,3 +776,169 @@
 - 优先修复递归删除保护与安全解包边界，这两项最接近真实误操作/恶意输入风险。
 - 给远程索引和 RPM metadata 增加大小上限、内容类型/压缩格式约束与测试。
 - 决定 `config.json` 是要真正参与命令默认值，还是仅作为展示/模板；若暂不生效，应在 README 中说清。
+
+## 2026-06-05 21:10 CST
+
+### 文档评审
+
+- 本轮开始已读取 `docs/development-log.md`、`README.md`、`PRD.md` 与当前源码。
+- 上轮审计结论中的高风险项（递归删除保护、安全解包边界）仍未修复，但不在本轮范围内。
+- 本轮目标：整理 .gitignore、提交 Linux-native 重构、添加 TUI 子项目。
+
+### 当前改动
+
+- 新增 `.gitignore`：排除 `meow`/`meow.exe` 二进制、`node_modules/`、`.claude/`、`.omc/`。
+- 从 git 追踪中移除 `meow`、`meow.exe`、`appicon.png`。
+- 提交 Linux-native 重构（10 文件变更）：
+  - `cmd/build.go`：用 `buildInput` 结构体替代 11 值返回元组。
+  - `internal/backend/native.go`：嵌入 bash 脚本，删除 `wsl.go`。
+  - `internal/backend/scripts/debug_package.sh`：RPM/deb 解压、vmlinux 查找、dwarf2json、xz 压缩。
+  - `internal/backend/scripts/vmlinux.sh`：直接 vmlinux 输入时的 dwarf2json + 压缩。
+  - `internal/resolver/ddeb.go`：HTTPS 升级（`http://` → `https://`）。
+  - `cmd/verify.go`：`exec.LookPath` 前置检查 vol。
+  - `.github/workflows/ci.yml`：Ubuntu-latest CI 门禁。
+- 提交 `golangci-lint` 配置（`.golangci.yml`）。
+- 提交 CLAUDE.md：为 Claude Code 提供项目指引。
+
+### 测试
+
+- `go test ./...` — 全部通过。
+- `go build -o meow .` — Linux ELF 编译成功。
+
+## 2026-06-05 21:30 CST
+
+### 文档评审
+
+- 本轮开始已读取 `docs/development-log.md`、OpenTUI 组件文档、当前 Go 后端代码。
+- 编译环境确认为 WSL/Linux，TUI 子项目假设直接在 Linux 环境运行，不调用 `wsl.exe`。
+- 设计决策：TUI 不复制 Go 逻辑，仅通过 `Bun.spawn` 调用 `meow` 和 `vol` 子进程。
+
+### 当前改动
+
+- 新增 `tui/` 子项目（Bun + TypeScript + @opentui/core）：
+  - `tui/package.json`：依赖 `@opentui/core ^0.3.2`、`@types/bun ^1.3.14`、`typescript ^6.0.3`。
+  - `tui/tsconfig.json`：ES2022、strict mode、bundler moduleResolution。
+  - `tui/src/types.ts`：`AppState`、`ScreenName`、`LogLevel`、`LogEntry`、`RunningTask`。
+  - `tui/src/state.ts`：不可变状态变更函数（`appendLog`、`appendChunkLog`、`setRunningTask` 等）。
+  - `tui/src/screens.ts`：7 个页面定义（Dashboard/Parse/Build/Volatility/Workflow/Cache/Logs）。
+  - `tui/src/app.ts`：OpenTUI 渲染器、键盘处理、ScrollBox 主内容区、日志预览。
+  - `tui/src/runner/process.ts`：通用 `Bun.spawn([cmd, ...args])` 封装，支持 AbortSignal 和流式日志。
+  - `tui/src/runner/meow.ts`：meow CLI 封装（`runMeowJSON`、`runDoctor`、`runParseBannerFile`、`runBuildDryRun`、`runVerify`、`runCacheList`）。
+  - `tui/src/runner/vol.ts`：Volatility 3 封装（`runVolPlugin`、`extractBanner`、`runPsList`）。
+  - `tui/tests/runner.test.ts`：参数构建测试（3 个用例）。
+- 实现 MVP Workflow：vol banner 提取 → meow dry-run build → meow verify。
+- 实现命令快捷键：数字 1-7 切页面、`r` 执行、`x` 取消、`q/Esc` 退出。
+
+### 测试
+
+- `bun install --cwd tui` — 依赖安装成功。
+- `bun test` — 3/3 通过。
+- `tsc --noEmit` — 类型检查通过（修复 `titleColor` 属性不兼容后）。
+
+### 已修复的验证问题
+
+- OpenTUI 当前版本不支持 `titleColor` 属性，已从 `Box`/`ScrollBox` 配置中移除。
+- `go test ./...` 在非 repo root 执行时报 `no packages to test`，改用 `go -C <repo-root> test ./...`。
+- `bunx --cwd ... tsc` 路径解析失败，改用 `node_modules/.bin/tsc` 直接调用。
+
+## 2026-06-05 21:35 CST
+
+### 文档评审
+
+- 本轮开始已读取 `docs/development-log.md`、当前 TUI 实现与 OpenTUI 组件文档。
+- TUI 工作区已有 `screens.ts`（7 页面）和 `app.ts`（命令式布局），本轮重构为三面板布局 + 命令系统。
+
+### 当前改动
+
+- 删除 `screens.ts`，重构为命令驱动的三面板布局：
+  - 左面板 (22%)：镜像信息、符号表路径、输出目录、当前插件、Banner 信息、运行状态。
+  - 中面板 (flexGrow)：日志输出 (ScrollBox)，底部粘性滚动。
+  - 右面板 (34 cols)：插件分类列表，当前插件高亮。
+- 新增 `tui/src/commands.ts`：`/` 前缀命令解析（`/mem`、`/symbol`、`/plugin`、`/run`、`/banner`、`/build`、`/verify`、`/clear`、`/help`）。
+- 新增 `tui/src/plugins.ts`：Volatility 3 插件分类列表（Process/Memory/Network/FileSystem/Kernel）。
+- 新增 `tui/src/logo.ts`：ASCII art `MEOW~~` logo 渲染。
+- 重构 `app.ts`：
+  - `Input` 组件用于命令输入，`i` 键聚焦，`Esc` 取消聚焦。
+  - `actionMap` 模式替代 switch/case，闭包捕获 `AbortController`。
+  - `setState` → `redraw()` 统一触发重绘。
+- 重构 `state.ts`：新增 `setCommandInput`、`setInputFocused`、`setImageInfo`。
+- 扩展 `types.ts`：新增 `ImageInfo`、`commandInput`、`inputFocused` 字段。
+
+### 测试
+
+- `bun test` — 3/3 通过。
+- `tsc --noEmit` — 类型检查通过。
+
+## 2026-06-05 21:45 CST
+
+### 文档评审
+
+- 本轮开始已审阅 7 个 commit 的完整 diff（4330856..09e43c8），共 30 文件、+1656/-180 行。
+- 发现 1 个 CRITICAL、2 个 HIGH、4 个 MEDIUM、1 个 LOW 问题。
+
+### 当前改动
+
+**CRITICAL — debug_package.sh 提取失败被吞没**
+- 问题：`cmd | while read` 管道中 `while` 循环退出码总是 0，即使 `cpio`/`tar` 失败。
+- 修复：改为临时文件模式 — 先执行提取命令写入临时文件、检查退出码、再从文件逐行读取。
+- RPM 分支和 deb/ddeb 分支均已修复。
+- 提取失败时输出 `[ERROR] ... extraction failed (code N)` 并立即退出。
+
+**HIGH — verify 结果覆盖 doctor 数据**
+- 问题：`runAction("verify")` 将结果存入 `lastDoctorResult`，覆盖之前 doctor 的结果。
+- 修复：`types.ts` 新增 `lastVerifyResult` 字段，verify action 和 workflow verify 步骤均使用新字段。
+
+**MEDIUM — 移除冗余 `ddebBuildScript()`**
+- 问题：`ddebBuildScript()` 和 `debugPackageBuildScript()` 返回相同内容，前者无外部调用。
+- 修复：移除 `ddebBuildScript()`，测试改用 `debugPackageBuildScript()`。
+
+**MEDIUM — package.json 依赖 `latest`**
+- 问题：所有依赖版本为 `"latest"`，lockfile 再生时可能拉到不兼容版本。
+- 修复：改为 `^0.3.2` / `^1.3.14` / `^6.0.3`。
+
+**LOW — CI golangci-lint `version: latest`**
+- 修复：固定为 `v2.1`。
+
+### 测试
+
+- `go test ./...` — 全部通过。
+- `bun test` — 3/3 通过。
+- `tsc --noEmit` — 类型检查通过。
+
+### 未修复的低置信度问题
+
+- `Bun.spawn` abort 时孙进程可能成为孤儿（需运行时确认 Bun 进程组 kill 行为）。
+- `lookPathWithContext` goroutine 泄漏（`LookPath` 极快，实际无影响）。
+
+## 2026-06-05 22:00 CST
+
+### 文档评审
+
+- 本轮开始已读取 `docs/development-log.md`、当前 CI 配置与项目结构。
+- 当前 CI 只有一个 `test-build-smoke` job，覆盖 Go 后端但不覆盖 TUI 前端。
+- 无架构设计文档，仅有开发日志和 PRD。
+
+### 当前改动
+
+**CI 门禁拆分**
+- 将 `.github/workflows/ci.yml` 从单 job 拆为两个并行 job：
+  - `backend (Go)`：lint → test → build → 3 条 smoke。
+  - `frontend (TUI)`：`bun install --frozen-lockfile` → `bunx tsc --noEmit` → `bun test`。
+- 前端 CI 使用 `oven-sh/setup-bun@v2` 固定 Bun 版本 `1.3.14`。
+- 前端 CI `working-directory: tui`，步骤自动在子项目目录执行。
+
+**架构设计文档**
+- 新增 `docs/architecture.md`，覆盖：
+  - 系统全景图（ASCII 模块关系图）
+  - Go 后端架构：CLI 层、Build 数据流水线、Banner 解析算法、Resolver 探测策略、后端脚本 Marker 协议、包格式识别
+  - TUI 前端架构：技术栈、UI 布局（三面板 ASCII 图）、状态管理、命令系统、Runner 层、生命周期
+  - 关键设计决策：TUI 不复制逻辑、argv 数组、不可变状态、临时文件错误处理、HEAD→GET Range 探测、远程 ISF 优先
+  - 测试策略
+
+**开发日志续写**
+- 追加 5 条日志条目：Linux-native 重构、TUI MVP、三面板重构、代码审阅修复、CI/文档补充。
+
+### 测试
+
+- `bun test && bunx tsc --noEmit` — 前端 CI 步骤本地验证通过。
+- `go test ./...` — 后端测试通过。
