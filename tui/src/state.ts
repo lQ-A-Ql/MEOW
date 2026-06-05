@@ -1,10 +1,9 @@
-import type { AppState, LogLevel, RunningTask, ScreenName } from "./types"
+import type { AppState, LogLevel, RunningTask } from "./types"
 
 export type { AppState } from "./types"
 
 export function createInitialState(): AppState {
   return {
-    activeScreen: "dashboard",
     meowPath: "../meow",
     volPath: "vol",
 
@@ -15,8 +14,13 @@ export function createInitialState(): AppState {
     cacheDir: "",
     plugin: "linux.pslist.PsList",
 
+    imageInfo: null,
+
     logs: [],
     nextLogId: 1,
+
+    commandInput: "",
+    inputFocused: false,
   }
 }
 
@@ -41,10 +45,6 @@ export function appendChunkLog(state: AppState, level: Extract<LogLevel, "stdout
   return lines.reduce((next, line) => appendLog(next, level, line), state)
 }
 
-export function setActiveScreen(state: AppState, activeScreen: ScreenName): AppState {
-  return { ...state, activeScreen }
-}
-
 export function setRunningTask(state: AppState, runningTask: RunningTask): AppState {
   return { ...state, runningTask }
 }
@@ -52,4 +52,16 @@ export function setRunningTask(state: AppState, runningTask: RunningTask): AppSt
 export function clearRunningTask(state: AppState): AppState {
   const { runningTask: _runningTask, ...rest } = state
   return rest
+}
+
+export function setCommandInput(state: AppState, commandInput: string): AppState {
+  return { ...state, commandInput }
+}
+
+export function setInputFocused(state: AppState, inputFocused: boolean): AppState {
+  return { ...state, inputFocused }
+}
+
+export function setImageInfo(state: AppState, imageInfo: AppState["imageInfo"]): AppState {
+  return { ...state, imageInfo }
 }

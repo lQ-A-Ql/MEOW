@@ -1,12 +1,3 @@
-export type ScreenName =
-  | "dashboard"
-  | "parse"
-  | "build"
-  | "volatility"
-  | "workflow"
-  | "cache"
-  | "logs"
-
 export type LogLevel = "info" | "success" | "warn" | "error" | "stdout" | "stderr"
 
 export type LogEntry = {
@@ -22,8 +13,16 @@ export type RunningTask = {
   abortController: AbortController
 }
 
+export type ImageInfo = {
+  banner?: string
+  os?: string
+  kernel?: string
+  arch?: string
+  distro?: string
+  packageVersion?: string
+}
+
 export type AppState = {
-  activeScreen: ScreenName
   meowPath: string
   volPath: string
 
@@ -34,9 +33,14 @@ export type AppState = {
   cacheDir: string
   plugin: string
 
+  imageInfo: ImageInfo | null
+
   logs: LogEntry[]
   nextLogId: number
   runningTask?: RunningTask
+
+  commandInput: string
+  inputFocused: boolean
 
   lastParseResult?: unknown
   lastBuildResult?: unknown

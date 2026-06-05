@@ -1,15 +1,20 @@
-import { Box, ScrollBox, Text, createCliRenderer, type KeyEvent } from "@opentui/core"
+import { Box, ScrollBox, Text, Input, createCliRenderer, t, bold, fg, type KeyEvent, type StyledText } from "@opentui/core"
+import { InputRenderableEvents } from "@opentui/core"
 
 import {
   appendChunkLog,
   appendLog,
   clearRunningTask,
   createInitialState,
-  setActiveScreen,
+  setCommandInput,
+  setInputFocused,
+  setImageInfo,
   setRunningTask,
 } from "./state"
-import type { AppState, LogLevel, ScreenName } from "./types"
-import { findScreen, findScreenByKey, getNextScreen, getScreenLines, screens } from "./screens"
+import type { AppState, LogLevel } from "./types"
+import { renderLogo, getLogoLineCount } from "./logo"
+import { pluginCategories } from "./plugins"
+import { executeCommand } from "./commands"
 import { runBuildDryRun, runCacheList, runDoctor, runParseBannerFile, runVerify } from "./runner/meow"
 import { extractBanner, runVolPlugin } from "./runner/vol"
 
@@ -25,11 +30,12 @@ export async function startApp() {
   })
 
   try {
-    let state = appendLog(createInitialState(), "info", "TUI started")
+    let state = appendLog(createInitialState(), "info", "TUI started — 输入 /help 查看命令")
     let isShuttingDown = false
+    let inputRenderable: ReturnType<typeof Input> | null = null
 
     const redraw = () => {
-      render(renderer, state)
+      render(renderer, state, inputRenderable)
     }
 
     const setState = (next: AppState) => {
@@ -38,9 +44,7 @@ export async function startApp() {
     }
 
     const shutdown = () => {
-      if (isShuttingDown) {
-        return
-      }
+      if (isShuttingDown) return
       isShuttingDown = true
       state.runningTask?.abortController.abort()
       renderer.destroy()
@@ -52,33 +56,90 @@ export async function startApp() {
       redraw()
     }
 
-    const runCurrentAction = async () => {
+    const handleCommand = async (input: string) => {
+      const result = executeCommand(state, input)
+      state = result.state
+      if (result.output) {
+        state = appendLog(state, "info", result.output)
+      }
+      if (result.action) {
+        await runAction(result.action)
+      }
+      state = setCommandInput(state, "")
+      redraw()
+    }
+
+    const runAction = async (action: string) => {
       if (state.runningTask) {
-        setState(appendLog(state, "warn", `A task is already running: ${state.runningTask.title}`))
+        state = appendLog(state, "warn", `任务运行中: ${state.runningTask.title}`)
         return
       }
 
-      const action = getAction(state.activeScreen)
+      const actionMap: Record<string, () => Promise<AppState>> = {
+        run: async () => {
+          const result = await runVolPlugin({
+            volPath: state.volPath,
+            memPath: state.memPath,
+            symbolsPath: state.symbolsPath,
+            plugin: state.plugin,
+            signal: abortController.signal,
+            onStdout: (c) => appendStreamLog("stdout", c),
+            onStderr: (c) => appendStreamLog("stderr", c),
+          })
+          if (result.code !== 0) throw new Error(`vol failed with code ${result.code}\n${result.stderr}`)
+          return { ...state, lastVolOutput: result.stdout }
+        },
+        banner: async () => {
+          const result = await extractBanner({
+            volPath: state.volPath,
+            memPath: state.memPath,
+            signal: abortController.signal,
+            onStdout: (c) => appendStreamLog("stdout", c),
+            onStderr: (c) => appendStreamLog("stderr", c),
+          })
+          if (result.code !== 0) throw new Error(`banner extraction failed with code ${result.code}\n${result.stderr}`)
+          return { ...state, lastVolOutput: result.stdout }
+        },
+        build: async () => {
+          const { data } = await runBuildDryRun({
+            meowPath: state.meowPath,
+            bannerFile: state.bannerFile,
+            signal: abortController.signal,
+            onStdout: (c) => appendStreamLog("stdout", c),
+            onStderr: (c) => appendStreamLog("stderr", c),
+          })
+          return { ...state, lastBuildResult: data }
+        },
+        verify: async () => {
+          const { data } = await runVerify({
+            meowPath: state.meowPath,
+            memPath: state.memPath,
+            symbolsPath: state.symbolsPath,
+            signal: abortController.signal,
+            onStdout: (c) => appendStreamLog("stdout", c),
+            onStderr: (c) => appendStreamLog("stderr", c),
+          })
+          return { ...state, lastDoctorResult: data }
+        },
+      }
+
+      const run = actionMap[action]
+      if (!run) return
+
       const abortController = new AbortController()
-      state = setRunningTask(appendLog(state, "info", `Running: ${action.title}`), {
+      state = setRunningTask(appendLog(state, "info", `执行: ${action}`), {
         id: String(Date.now()),
-        title: action.title,
+        title: action,
         abortController,
       })
       redraw()
 
       try {
-        const next = await action.run({
-          getState: () => state,
-          setState,
-          signal: abortController.signal,
-          onStdout: (chunk) => appendStreamLog("stdout", chunk),
-          onStderr: (chunk) => appendStreamLog("stderr", chunk),
-        })
-        state = appendLog(next, "success", `Completed: ${action.title}`)
+        const next = await run()
+        state = appendLog(next, "success", `完成: ${action}`)
       } catch (error) {
         const level = abortController.signal.aborted ? "warn" : "error"
-        const message = abortController.signal.aborted ? `Cancelled: ${action.title}` : formatError(error)
+        const message = abortController.signal.aborted ? `已取消: ${action}` : formatError(error)
         state = appendLog(state, level, message)
       } finally {
         state = clearRunningTask(state)
@@ -86,237 +147,84 @@ export async function startApp() {
       }
     }
 
+    // Initial render
+    render(renderer, state, inputRenderable)
+
+    // Setup input component after first render
+    const setupInput = () => {
+      inputRenderable = Input({
+        id: "cmd-input",
+        placeholder: "输入命令... (/help 查看帮助)",
+        textColor: "#E5E7EB",
+        cursorColor: "#60A5FA",
+      })
+
+      inputRenderable.on(InputRenderableEvents.ENTER, (value: string) => {
+        if (value.trim()) {
+          void handleCommand(value)
+        }
+        inputRenderable!.value = ""
+      })
+
+      inputRenderable.on(InputRenderableEvents.INPUT, (value: string) => {
+        state = setCommandInput(state, value)
+      })
+
+      redraw()
+    }
+
+    setupInput()
+
+    // Keyboard handler
     renderer.keyInput.on("keypress", (key: KeyEvent) => {
-      if (key.name === "r") {
-        void runCurrentAction()
+      // When input is focused, let Input component handle most keys
+      if (state.inputFocused) {
+        if (key.name === "escape") {
+          state = setInputFocused(state, false)
+          redraw()
+          return
+        }
+        // Let Input handle the rest
+        return
+      }
+
+      // Global keys (input not focused)
+      if (key.ctrl && key.name === "c") {
+        shutdown()
+        return
+      }
+
+      if (key.name === "q" || key.name === "escape") {
+        shutdown()
+        return
+      }
+
+      if (key.name === "i" || key.name === ":") {
+        state = setInputFocused(state, true)
+        redraw()
+        inputRenderable?.focus()
         return
       }
 
       if (key.name === "x" && state.runningTask) {
         state.runningTask.abortController.abort()
-        setState(appendLog(state, "warn", `Cancelling: ${state.runningTask.title}`))
+        state = appendLog(state, "warn", `取消中: ${state.runningTask.title}`)
+        redraw()
         return
       }
 
-      const nextState = handleKey(state, key, shutdown)
-      if (nextState !== state) {
-        state = nextState
-        redraw()
+      if (key.name === "r") {
+        void runAction("run")
+        return
       }
     })
-
-    redraw()
   } catch (error) {
     renderer.destroy()
     throw error
   }
 }
 
-export function handleKey(state: AppState, key: Pick<KeyEvent, "name" | "ctrl">, shutdown?: () => void): AppState {
-  if (key.ctrl && key.name === "c") {
-    shutdown?.()
-    return state
-  }
-
-  if (key.name === "escape" || key.name === "q") {
-    shutdown?.()
-    return state
-  }
-
-  if (key.name === "[" || key.name === "left") {
-    return switchScreen(state, getNextScreen(state.activeScreen, -1))
-  }
-
-  if (key.name === "]" || key.name === "right") {
-    return switchScreen(state, getNextScreen(state.activeScreen, 1))
-  }
-
-  if (key.name === "d") {
-    return switchScreen(state, "dashboard")
-  }
-
-  if (key.name === "l") {
-    return switchScreen(state, "logs")
-  }
-
-  const screen = findScreenByKey(key.name)
-  if (screen) {
-    return switchScreen(state, screen.name)
-  }
-
-  return state
-}
-
-type ActionContext = {
-  getState: () => AppState
-  setState: (state: AppState) => void
-  signal: AbortSignal
-  onStdout: (chunk: string) => void
-  onStderr: (chunk: string) => void
-}
-
-type ScreenAction = {
-  title: string
-  run: (context: ActionContext) => Promise<AppState>
-}
-
-function getAction(screen: ScreenName): ScreenAction {
-  switch (screen) {
-    case "dashboard":
-      return {
-        title: "doctor",
-        run: async ({ getState, signal, onStdout, onStderr }) => {
-          const current = getState()
-          const { data } = await runDoctor({
-            meowPath: current.meowPath,
-            signal,
-            onStdout,
-            onStderr,
-          })
-          return { ...getState(), lastDoctorResult: data }
-        },
-      }
-    case "parse":
-      return {
-        title: "parse banner fixture",
-        run: async ({ getState, signal, onStdout, onStderr }) => {
-          const current = getState()
-          const { data } = await runParseBannerFile({
-            meowPath: current.meowPath,
-            bannerFile: current.bannerFile,
-            signal,
-            onStdout,
-            onStderr,
-          })
-          return { ...getState(), lastParseResult: data }
-        },
-      }
-    case "build":
-      return {
-        title: "build dry-run",
-        run: async ({ getState, signal, onStdout, onStderr }) => {
-          const current = getState()
-          const { data } = await runBuildDryRun({
-            meowPath: current.meowPath,
-            bannerFile: current.bannerFile,
-            signal,
-            onStdout,
-            onStderr,
-          })
-          return { ...getState(), lastBuildResult: data }
-        },
-      }
-    case "volatility":
-      return {
-        title: "volatility plugin",
-        run: async ({ getState, signal, onStdout, onStderr }) => {
-          const current = getState()
-          if (!current.memPath) {
-            return appendLog(current, "warn", "Set memPath in state before running Volatility.")
-          }
-
-          const result = await runVolPlugin({
-            volPath: current.volPath,
-            memPath: current.memPath,
-            symbolsPath: current.symbolsPath,
-            plugin: current.plugin,
-            signal,
-            onStdout,
-            onStderr,
-          })
-          if (result.code !== 0) {
-            throw new Error(`vol failed with code ${result.code}\n${result.stderr}`)
-          }
-          return { ...getState(), lastVolOutput: result.stdout }
-        },
-      }
-    case "workflow":
-      return {
-        title: "MVP workflow",
-        run: async (context) => runWorkflow(context),
-      }
-    case "cache":
-      return {
-        title: "cache list",
-        run: async ({ getState, signal, onStdout, onStderr }) => {
-          const current = getState()
-          const { data } = await runCacheList({
-            meowPath: current.meowPath,
-            signal,
-            onStdout,
-            onStderr,
-          })
-          return { ...getState(), lastCacheResult: data }
-        },
-      }
-    case "logs":
-      return {
-        title: "clear logs",
-        run: async ({ getState }) => ({ ...getState(), logs: [], nextLogId: 1 }),
-      }
-  }
-}
-
-async function runWorkflow({ getState, setState, signal, onStdout, onStderr }: ActionContext): Promise<AppState> {
-  let current = getState()
-
-  if (current.memPath) {
-    setState(appendLog(current, "info", "Workflow step 1/3: extracting banner with vol"))
-    const bannerResult = await extractBanner({
-      volPath: current.volPath,
-      memPath: current.memPath,
-      signal,
-      onStdout,
-      onStderr,
-    })
-    if (bannerResult.code !== 0) {
-      throw new Error(`banner extraction failed with code ${bannerResult.code}\n${bannerResult.stderr}`)
-    }
-    current = { ...getState(), lastVolOutput: bannerResult.stdout }
-    setState(current)
-  } else {
-    setState(appendLog(current, "warn", "Workflow skipped vol banner extraction because memPath is not set."))
-  }
-
-  current = getState()
-  setState(appendLog(current, "info", "Workflow step 2/3: running meow build dry-run"))
-  const buildResult = await runBuildDryRun({
-    meowPath: current.meowPath,
-    bannerFile: current.bannerFile,
-    signal,
-    onStdout,
-    onStderr,
-  })
-  current = { ...getState(), lastBuildResult: buildResult.data }
-  setState(current)
-
-  current = getState()
-  if (current.memPath) {
-    setState(appendLog(current, "info", "Workflow step 3/3: verifying symbols with meow verify"))
-    const verifyResult = await runVerify({
-      meowPath: current.meowPath,
-      memPath: current.memPath,
-      symbolsPath: current.symbolsPath,
-      signal,
-      onStdout,
-      onStderr,
-    })
-    return { ...getState(), lastDoctorResult: verifyResult.data }
-  }
-
-  return appendLog(getState(), "warn", "Workflow skipped verify because memPath is not set.")
-}
-
-function switchScreen(state: AppState, activeScreen: AppState["activeScreen"]): AppState {
-  if (state.activeScreen === activeScreen) {
-    return state
-  }
-
-  const next = setActiveScreen(state, activeScreen)
-  return appendLog(next, "info", `Switched to ${findScreen(activeScreen).label}`)
-}
-
-function render(renderer: Renderer, state: AppState) {
+function render(renderer: Renderer, state: AppState, inputRenderable: ReturnType<typeof Input> | null) {
   const existing = renderer.root.getRenderable(rootId)
   if (existing) {
     renderer.root.remove(rootId)
@@ -329,126 +237,197 @@ function render(renderer: Renderer, state: AppState) {
         width: "100%",
         height: "100%",
         flexDirection: "column",
-        backgroundColor: "#111827",
+        backgroundColor: "#0F172A",
       },
-      renderHeader(state),
-      renderBody(state),
-      renderLogPreview(state),
-      renderStatus(state),
+      renderLogoPanel(),
+      renderMainRow(state),
+      renderCommandBar(state, inputRenderable),
     ),
   )
 }
 
-function renderHeader(state: AppState) {
+function renderLogoPanel() {
   return Box(
     {
-      borderStyle: "rounded",
-      borderColor: "#38BDF8",
-      title: " MEOW TUI ",
+      height: getLogoLineCount() + 1,
       flexDirection: "column",
-      padding: 1,
+      alignItems: "center",
+      backgroundColor: "#0F172A",
     },
-    Text({ content: "Linux symbol generation + Volatility 3", fg: "#E5E7EB" }),
-    Text({ content: renderTabs(state), fg: "#93C5FD" }),
+    Text({ content: renderLogo() }),
   )
 }
 
-function renderBody(state: AppState) {
-  const screen = findScreen(state.activeScreen)
-  const lines = getScreenLines(state)
+function renderMainRow(state: AppState) {
+  return Box(
+    {
+      flexGrow: 1,
+      flexDirection: "row",
+    },
+    renderLeftPanel(state),
+    renderCenterPanel(state),
+    renderRightPanel(state),
+  )
+}
+
+function renderLeftPanel(state: AppState) {
+  const lines: StyledText[] = []
+
+  lines.push(t`${bold(fg("#60A5FA")("镜像信息"))}`)
+  lines.push(t` `)
+
+  if (state.memPath) {
+    lines.push(t`${fg("#888")("内存镜像:")}`)
+    lines.push(t`${fg("#E5E7EB")(`  ${state.memPath}`)}`)
+  } else {
+    lines.push(t`${fg("#888")("内存镜像:")}`)
+    lines.push(t`${fg("#6B7280")("  <未设置>")}`)
+  }
+
+  lines.push(t` `)
+  lines.push(t`${fg("#888")("符号表:")}`)
+  lines.push(t`${fg("#E5E7EB")(`  ${state.symbolsPath}`)}`)
+
+  lines.push(t` `)
+  lines.push(t`${fg("#888")("输出目录:")}`)
+  lines.push(t`${fg("#E5E7EB")(`  ${state.outDir}`)}`)
+
+  lines.push(t` `)
+  lines.push(t`${fg("#888")("当前插件:")}`)
+  lines.push(t`${fg("#A78BFA")(`  ${state.plugin}`)}`)
+
+  if (state.imageInfo) {
+    lines.push(t` `)
+    lines.push(t`${bold(fg("#34D399")("Banner 信息"))}`)
+    if (state.imageInfo.distro) lines.push(t`${fg("#D1D5DB")(`  发行版: ${state.imageInfo.distro}`)}`)
+    if (state.imageInfo.kernel) lines.push(t`${fg("#D1D5DB")(`  内核:   ${state.imageInfo.kernel}`)}`)
+    if (state.imageInfo.arch) lines.push(t`${fg("#D1D5DB")(`  架构:   ${state.imageInfo.arch}`)}`)
+    if (state.imageInfo.packageVersion) lines.push(t`${fg("#D1D5DB")(`  版本:   ${state.imageInfo.packageVersion}`)}`)
+  }
+
+  lines.push(t` `)
+  const task = state.runningTask
+    ? bold(fg("#FBBF24")(`⟳ ${state.runningTask.title}`))
+    : fg("#6B7280")("空闲")
+  lines.push(t`${fg("#888")("状态: ")}${task}`)
+
+  return Box(
+    {
+      width: "22%",
+      borderStyle: "rounded",
+      borderColor: "#334155",
+      flexDirection: "column",
+      padding: 1,
+    },
+    ...lines.map((line, i) => Text({ id: `left-${i}`, content: line })),
+  )
+}
+
+function renderCenterPanel(state: AppState) {
+  const logLines = state.logs.length === 0
+    ? [Text({ id: "center-empty", content: "暂无输出。输入命令或按 r 执行当前插件。", fg: "#6B7280" })]
+    : state.logs.map((entry) => {
+        const color = getLogColor(entry.level)
+        return Text({
+          id: `log-${entry.id}`,
+          content: `[${entry.time}] ${entry.message}`,
+          fg: color,
+        })
+      })
 
   return ScrollBox(
     {
       flexGrow: 1,
       borderStyle: "rounded",
-      borderColor: "#4B5563",
-      title: ` ${screen.label} `,
+      borderColor: "#334155",
       flexDirection: "column",
       padding: 1,
-      stickyScroll: state.activeScreen === "logs",
-      stickyStart: state.activeScreen === "logs" ? "bottom" : undefined,
+      stickyScroll: true,
+      stickyStart: "bottom",
     },
-    ...lines.map((line, index) =>
-      Text({
-        id: `body-line-${index}`,
-        content: line.length === 0 ? " " : line,
-        fg: getLineColor(line),
-      }),
-    ),
+    ...logLines,
   )
 }
 
-function renderLogPreview(state: AppState) {
-  const preview = state.logs.slice(-3)
-  const lines = preview.length === 0 ? ["No logs yet."] : preview.map((entry) => `[${entry.time}] ${entry.level}: ${entry.message}`)
+function renderRightPanel(state: AppState) {
+  const lines: ReturnType<typeof Text>[] = []
 
-  return Box(
+  lines.push(Text({ id: "rp-title", content: t`${bold(fg("#60A5FA")("插件列表"))}` }))
+  lines.push(Text({ id: "rp-hint", content: " /plugin <name> 切换", fg: "#6B7280" }))
+  lines.push(Text({ id: "rp-spacer", content: " " }))
+
+  for (const category of pluginCategories) {
+    lines.push(Text({ id: `rp-cat-${category.name}`, content: t`${category.icon} ${bold(fg("#FBBF24")(category.name))}` }))
+    for (const plugin of category.plugins) {
+      const isActive = state.plugin === plugin.name
+      if (isActive) {
+        lines.push(Text({ id: `rp-${plugin.name}`, content: t`${fg("#34D399")("▸ ")}${bold(fg("#34D399")(plugin.name))}` }))
+      } else {
+        lines.push(Text({ id: `rp-${plugin.name}`, content: t`${fg("#4B5563")("  ")}${fg("#9CA3AF")(plugin.name)}` }))
+      }
+      lines.push(Text({ id: `rp-d-${plugin.name}`, content: t`${fg("#6B7280")(`    ${plugin.description}`)}` }))
+    }
+    lines.push(Text({ id: `rp-spacer-${category.name}`, content: " " }))
+  }
+
+  return ScrollBox(
     {
-      height: 7,
+      width: 34,
       borderStyle: "rounded",
-      borderColor: "#374151",
-      title: " Recent logs ",
+      borderColor: "#334155",
       flexDirection: "column",
       padding: 1,
     },
-    ...lines.map((line, index) =>
-      Text({
-        id: `log-line-${index}`,
-        content: line,
-        fg: "#D1D5DB",
-      }),
-    ),
+    ...lines,
   )
 }
 
-function renderStatus(state: AppState) {
-  const task = state.runningTask ? `running: ${state.runningTask.title}` : "idle"
+function renderCommandBar(state: AppState, inputRenderable: ReturnType<typeof Input> | null) {
+  const borderColor = state.inputFocused ? "#60A5FA" : "#334155"
+  const hintText = state.inputFocused ? "Esc 取消" : "i 聚焦 | r 执行 | q 退出"
 
+  if (inputRenderable) {
+    return Box(
+      {
+        height: 3,
+        borderStyle: "rounded",
+        borderColor,
+        flexDirection: "row",
+        alignItems: "center",
+        padding: 0,
+      },
+      Text({ content: t`${bold(fg("#60A5FA")(" > "))}` }),
+      inputRenderable,
+      Text({ content: t`  ${fg("#6B7280")(hintText)}` }),
+    )
+  }
+
+  // Fallback before input is created
   return Box(
     {
       height: 3,
-      backgroundColor: "#0F172A",
-      borderStyle: "single",
-      borderColor: "#334155",
+      borderStyle: "rounded",
+      borderColor,
+      flexDirection: "row",
+      alignItems: "center",
       padding: 0,
     },
-    Text({
-      content: ` ${findScreen(state.activeScreen).description} | ${task} | r run | x cancel | q/Esc quit | 1-7 tabs`,
-      fg: "#E2E8F0",
-    }),
+    Text({ content: t`${bold(fg("#60A5FA")(" > "))}${fg("#6B7280")("输入命令...  ")}${fg("#6B7280")(hintText)}` }),
   )
 }
 
-function renderTabs(state: AppState): string {
-  return screens
-    .map((screen) => {
-      const label = `${screen.key}:${screen.label}`
-      return screen.name === state.activeScreen ? `[${label}]` : ` ${label} `
-    })
-    .join(" ")
-}
-
-function getLineColor(line: string): string {
-  if (line.startsWith("Action") || line.startsWith("Actions") || line.startsWith("Sequence") || line.startsWith("Planned")) {
-    return "#FACC15"
+function getLogColor(level: LogLevel): string {
+  switch (level) {
+    case "info": return "#D1D5DB"
+    case "success": return "#34D399"
+    case "warn": return "#FBBF24"
+    case "error": return "#EF4444"
+    case "stdout": return "#93C5FD"
+    case "stderr": return "#FCA5A5"
   }
-
-  const command = line.trim()
-  if (command.startsWith("../meow") || command.startsWith("vol") || command.startsWith("r")) {
-    return "#86EFAC"
-  }
-
-  if (line.includes("no wsl.exe") || line.includes("argv arrays")) {
-    return "#FCA5A5"
-  }
-
-  return "#E5E7EB"
 }
 
 function formatError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message
-  }
-
+  if (error instanceof Error) return error.message
   return String(error)
 }
