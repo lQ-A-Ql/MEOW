@@ -115,41 +115,10 @@ func (m *Model) refreshContent() {
 }
 
 func (m *Model) applyLayout() {
-	w := m.width
-	h := m.height
-	if w < 20 || h < 10 {
+	if m.width < 20 || m.height < 10 {
 		return
 	}
-
-	logoH := 8
-	barH := 3
-	mainH := h - logoH - barH
-	if mainH < 3 {
-		mainH = 3
-	}
-
-	leftW := 30
-	rightW := 38
-	centerW := w - leftW - rightW
-	if centerW < 15 {
-		leftW = 0
-		rightW = 0
-		centerW = w
-	}
-
-	vpContentH := mainH - 2 // border top+bottom
-	if vpContentH < 1 {
-		vpContentH = 1
-	}
-	vpContentW := centerW - 2 // border left+right
-	if vpContentW < 1 {
-		vpContentW = 1
-	}
-
-	m.vp.Width = vpContentW
-	m.vp.Height = vpContentH
-
-	barContentW := w - 6 // border + padding + " > "
+	barContentW := m.width - 6
 	if barContentW < 5 {
 		barContentW = 5
 	}
@@ -374,8 +343,31 @@ func (m Model) View() string {
 
 	logo := m.buildLogo()
 	left := m.buildLeftPanel()
-	center := m.buildCenterPanel()
 	right := m.buildRightPanel()
+
+	// Measure actual rendered widths (includes border + padding)
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+
+	// Center fills remaining space
+	centerW := m.width - leftW - rightW
+	if centerW < 10 {
+		centerW = 10
+	}
+
+	// Viewport = center content area minus border(2)
+	vpW := centerW - 2
+	vpH := m.height - 8 - 3 - 2 // logo - bar - border
+	if vpH < 1 {
+		vpH = 1
+	}
+	if vpW < 1 {
+		vpW = 1
+	}
+	m.vp.Width = vpW
+	m.vp.Height = vpH
+
+	center := m.buildCenterPanel(centerW, vpW, vpH)
 	bar := m.buildBar()
 
 	main := lipgloss.JoinHorizontal(lipgloss.Top, left, center, right)
@@ -431,23 +423,10 @@ func (m Model) buildLeftPanel() string {
 	return panelStyle.Width(30).Render(strings.Join(rows, "\n"))
 }
 
-func (m Model) buildCenterPanel() string {
-	w := m.width - 68 // total - left(30) - right(38)
-	if m.width < 60 {
-		w = m.width
-	}
-	if w < 10 {
-		w = 10
-	}
-
-	m.vp.Width = w - 2
-	h := m.height - 8 - 3 - 2 // logo - bar - border
-	if h < 1 {
-		h = 1
-	}
-	m.vp.Height = h
-
-	return panelStyle.Width(w).Render(m.vp.View())
+func (m Model) buildCenterPanel(contentW, vpW, vpH int) string {
+	m.vp.Width = vpW
+	m.vp.Height = vpH
+	return panelStyle.Width(contentW).Render(m.vp.View())
 }
 
 func (m Model) buildRightPanel() string {
