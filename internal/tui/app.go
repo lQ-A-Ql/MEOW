@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -27,7 +26,6 @@ type Model struct {
 
 	width, height int
 	input         textinput.Model
-	vp            viewport.Model
 	logs          *LogStore
 	inputFocused  bool
 	running       bool
@@ -40,9 +38,6 @@ func NewModel() Model {
 	ti.CharLimit = 256
 	ti.Width = 60
 
-	vp := viewport.New(80, 24)
-	vp.SetContent("欢迎使用 meow TUI\n输入 /help 查看可用命令")
-
 	return Model{
 		meowPath:    "../meow",
 		volPath:     "vol",
@@ -50,7 +45,6 @@ func NewModel() Model {
 		outDir:      "./symbols/linux",
 		plugin:      "linux.pslist.PsList",
 		input:       ti,
-		vp:          vp,
 		logs:        NewLogStore(),
 	}
 }
@@ -66,15 +60,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.input.Width = m.width - 10
 		return m, nil
-
 	case tea.KeyMsg:
 		return m.onKey(msg)
-
 	case logMsg:
 		m.logs.Append(msg.level, msg.message)
-		m.syncVP()
 		return m, nil
-
 	case taskDoneMsg:
 		m.running = false
 		m.cancelFunc = nil
@@ -83,21 +73,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.logs.Append(LogSuccess, "完成")
 		}
-		m.syncVP()
 		return m, nil
 	}
-
 	if m.inputFocused {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
 	return m, nil
-}
-
-func (m *Model) syncVP() {
-	m.vp.SetContent(strings.Join(m.logs.RenderLines(), "\n"))
-	m.vp.GotoBottom()
 }
 
 func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -109,36 +92,29 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			return m, nil
 		case "enter":
-			value := m.input.Value()
+			v := m.input.Value()
 			m.input.SetValue("")
 			m.inputFocused = false
 			m.input.Blur()
-			if value != "" {
-				return m.dispatch(value)
-			}
+			if v != "" { return m.dispatch(v) }
 			return m, nil
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
-
 	switch msg.String() {
 	case "ctrl+c", "q":
-		if m.cancelFunc != nil {
-			m.cancelFunc()
-		}
+		if m.cancelFunc != nil { m.cancelFunc() }
 		return m, tea.Quit
 	case "i", ":":
 		m.inputFocused = true
 		return m, m.input.Focus()
-	case "r":
-		return m.startAction("run")
+	case "r": return m.startAction("run")
 	case "x":
 		if m.running && m.cancelFunc != nil {
 			m.cancelFunc()
 			m.logs.Append(LogWarn, "取消中...")
-			m.syncVP()
 		}
 		return m, nil
 	}
@@ -148,40 +124,31 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) dispatch(input string) (tea.Model, tea.Cmd) {
 	input = strings.TrimSpace(input)
 	if !strings.HasPrefix(input, "/") {
-		return m, emitLog(LogError, "未知命令: "+input+" (输入 /help)")
+		return m, emitLog(LogError, "未知命令: "+input)
 	}
-	parts := strings.SplitN(input, " ", 2)
-	cmd := strings.ToLower(parts[0][1:])
+	p := strings.SplitN(input, " ", 2)
+	cmd := strings.ToLower(p[0][1:])
 	args := ""
-	if len(parts) > 1 {
-		args = strings.TrimSpace(parts[1])
-	}
+	if len(p) > 1 { args = strings.TrimSpace(p[1]) }
 
 	switch cmd {
 	case "help":
 		return m, emitLog(LogInfo, "可用命令:\n  /mem <path>    设置内存镜像\n  /symbol <path> 设置符号表\n  /plugin <name> 设置插件\n  /run           执行插件\n  /banner        提取banner\n  /build         dry-run构建\n  /verify        验证符号\n  /clear         清空日志\n  /help          显示帮助\n\n快捷键: i 输入 | r 执行 | x 取消 | q 退出")
 	case "mem":
 		if args == "" { return m, emitLog(LogInfo, "用法: /mem <path>") }
-		m.memPath = args
-		return m, emitLog(LogSuccess, "✓ 内存镜像: "+args)
+		m.memPath = args; return m, emitLog(LogSuccess, "✓ 内存镜像: "+args)
 	case "symbol":
 		if args == "" { return m, emitLog(LogInfo, "用法: /symbol <path>") }
-		m.symbolsPath = args
-		return m, emitLog(LogSuccess, "✓ 符号表: "+args)
+		m.symbolsPath = args; return m, emitLog(LogSuccess, "✓ 符号表: "+args)
 	case "plugin":
 		if args == "" { return m, emitLog(LogInfo, "用法: /plugin <name>") }
-		m.plugin = args
-		return m, emitLog(LogSuccess, "✓ 插件: "+args)
-	case "clear":
-		m.logs.Clear()
-		m.vp.SetContent("")
-		return m, nil
+		m.plugin = args; return m, emitLog(LogSuccess, "✓ 插件: "+args)
+	case "clear": m.logs.Clear(); return m, nil
 	case "run": return m.startAction("run")
 	case "banner": return m.startAction("banner")
 	case "build": return m.startAction("build")
 	case "verify": return m.startAction("verify")
-	default:
-		return m, emitLog(LogError, "✗ 未知: /"+cmd)
+	default: return m, emitLog(LogError, "✗ 未知: /"+cmd)
 	}
 }
 
@@ -190,9 +157,7 @@ func emitLog(level LogLevel, msg string) tea.Cmd {
 }
 
 func (m Model) startAction(action string) (tea.Model, tea.Cmd) {
-	if m.running {
-		return m, emitLog(LogWarn, "任务运行中，按 x 取消")
-	}
+	if m.running { return m, emitLog(LogWarn, "任务运行中，按 x 取消") }
 	if (action == "run" || action == "banner" || action == "verify") && m.memPath == "" {
 		return m, emitLog(LogError, "✗ 请先设置: /mem <path>")
 	}
@@ -203,9 +168,7 @@ func (m Model) startAction(action string) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(emitLog(LogInfo, "⟶ 执行: "+action), func() tea.Msg { return taskDoneMsg{err: doAct(ctx, p)} })
 }
 
-type actP struct {
-	action, vol, meow, mem, sym, banner, plugin string
-}
+type actP struct{ action, vol, meow, mem, sym, banner, plugin string }
 
 func doAct(ctx context.Context, p actP) error {
 	switch p.action {
@@ -213,20 +176,16 @@ func doAct(ctx context.Context, p actP) error {
 		args := []string{"-f", p.mem}
 		if p.sym != "" { args = append(args, "-s", p.sym) }
 		args = append(args, p.plugin)
-		_, err := runStream(ctx, p.vol, args...)
-		return err
+		_, err := runStream(ctx, p.vol, args...); return err
 	case "banner":
-		_, err := runStream(ctx, p.vol, "-f", p.mem, "banners.Banners")
-		return err
+		_, err := runStream(ctx, p.vol, "-f", p.mem, "banners.Banners"); return err
 	case "build":
 		args := []string{"--json", "build", "--dry-run"}
 		if p.banner != "" { args = append(args, "--banner-file", p.banner) }
 		args = append(args, "--no-remote-symbols")
-		_, err := runStream(ctx, p.meow, args...)
-		return err
+		_, err := runStream(ctx, p.meow, args...); return err
 	case "verify":
-		_, err := runStream(ctx, p.meow, "--json", "verify", "--mem", p.mem, "--symbols", p.sym)
-		return err
+		_, err := runStream(ctx, p.meow, "--json", "verify", "--mem", p.mem, "--symbols", p.sym); return err
 	}
 	return fmt.Errorf("unknown: %s", p.action)
 }
@@ -234,15 +193,11 @@ func doAct(ctx context.Context, p actP) error {
 // ── View ────────────────────────────────────────────────────
 
 func (m Model) View() string {
-	if m.width == 0 {
-		return "正在初始化..."
-	}
-
-	w := m.width
-	h := m.height
+	if m.width == 0 { return "正在初始化..." }
+	w, h := m.width, m.height
 
 	// Logo (7 lines)
-	logoLines := []string{
+	logoRaw := []string{
 		"███╗   ███╗███████╗ ██████╗ ██╗    ██╗",
 		"████╗ ████║██╔════╝██╔═══██╗██║    ██║",
 		"██╔████╔██║█████╗  ██║   ██║██║ █╗ ██║",
@@ -251,54 +206,41 @@ func (m Model) View() string {
 		"╚═╝     ╚═╝╚══════╝ ╚═════╝  ╚══╝╚══╝",
 		"=^..^=__/  meow~ Vol3 Linux Symbol Builder",
 	}
-	var logo strings.Builder
-	for i, l := range logoLines {
-		if i < 6 {
-			logo.WriteString(gradientLine(l, w))
-			logo.WriteByte('\n')
-		} else {
-			logo.WriteString(gradientLine(l, w))
-		}
+	var logoB strings.Builder
+	for _, l := range logoRaw {
+		logoB.WriteString(gradientLine(l, w))
+		logoB.WriteByte('\n')
 	}
-	logoStr := logo.String()
+	logoStr := strings.TrimRight(logoB.String(), "\n")
 	logoH := 7
 
-	// Command bar (1 line content)
+	// Bar (1 line)
 	bar := " > " + m.input.View() + "  " + mutedStyle.Render("i 输入 | r 执行 | q 退出")
+	barH := 1
 
-	// Available height for panels
-	mainH := h - logoH - 1 - 2 // logo + bar(1) + vp border(2)
-	if mainH < 3 {
-		mainH = 3
-	}
+	// Panel area
+	panelH := h - logoH - barH
+	if panelH < 3 { panelH = 3 }
 
-	// Available width for panels
-	leftW := 0
-	rightW := 0
-	centerW := w
-
+	leftW, rightW := 0, 0
 	if w >= 80 {
-		leftW = 28
-		rightW = 36
-		centerW = w - leftW - rightW
+		leftW = 28; rightW = 36
 	} else if w >= 55 {
 		leftW = 22
-		centerW = w - leftW
 	}
 
 	// Left panel
 	left := ""
 	if leftW > 0 {
-		var rows []string
-		rows = append(rows, titleStyle.Render("镜像信息"))
-		rows = append(rows, "")
-		rows = append(rows, labelStyle.Render("插件:")+valueStyle.Render(" "+m.plugin))
-		rows = append(rows, labelStyle.Render("符号:")+valueStyle.Render(" "+m.symbolsPath))
-		rows = append(rows, "")
+		rows := []string{titleStyle.Render("镜像信息"), "",
+			labelStyle.Render("插件: ") + valueStyle.Render(m.plugin),
+			labelStyle.Render("符号: ") + valueStyle.Render(m.symbolsPath),
+			"",
+		}
 		if m.memPath != "" {
-			rows = append(rows, labelStyle.Render("镜像:")+valueStyle.Render(" "+m.memPath))
+			rows = append(rows, labelStyle.Render("镜像: ")+valueStyle.Render(m.memPath))
 		} else {
-			rows = append(rows, labelStyle.Render("镜像:")+mutedStyle.Render(" <未设置>"))
+			rows = append(rows, labelStyle.Render("镜像: ")+mutedStyle.Render("<未设置>"))
 		}
 		rows = append(rows, "")
 		if m.running {
@@ -312,9 +254,7 @@ func (m Model) View() string {
 	// Right panel
 	right := ""
 	if rightW > 0 {
-		var rows []string
-		rows = append(rows, titleStyle.Render("插件列表"))
-		rows = append(rows, "")
+		rows := []string{titleStyle.Render("插件列表"), ""}
 		for _, cat := range PluginCategories {
 			rows = append(rows, warnStyle.Bold(true).Render(cat.Icon+" "+cat.Name))
 			for _, p := range cat.Plugins {
@@ -329,24 +269,30 @@ func (m Model) View() string {
 		right = panelStyle.Width(rightW).Render(strings.Join(rows, "\n"))
 	}
 
-	// Viewport
-	m.vp.Width = centerW - 2 // border
-	m.vp.Height = mainH
-	center := m.vp.View()
+	// Log lines (fill available height)
+	logLines := m.logs.RenderLines()
+	start := 0
+	if len(logLines) > panelH-2 { start = len(logLines) - (panelH - 2) }
+	if start < 0 { start = 0 }
+	visible := logLines[start:]
+	logContent := strings.Join(visible, "\n")
+
+	// Left padding
+	logView := " " + logContent
 
 	// Join
 	parts := []string{logoStr}
 	if left != "" || right != "" {
-		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, left, center, right))
+		parts = append(parts, lipgloss.JoinHorizontal(lipgloss.Top, left, logView, right))
 	} else {
-		parts = append(parts, center)
+		parts = append(parts, logView)
 	}
 	parts = append(parts, bar)
 
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// Gradient
+// ── Gradient ────────────────────────────────────────────────
 
 func gradientLine(line string, totalCols int) string {
 	runes := []rune(line)
@@ -364,15 +310,9 @@ func gradientRGB(col, totalCols int) (int, int, int) {
 	if totalCols <= 1 { totalCols = 2 }
 	t := float64(col) / float64(totalCols-1)
 	switch {
-	case t < 0.33:
-		s := t / 0.33
-		return lerp(0, 120, s), lerp(200, 80, s), lerp(255, 255, s)
-	case t < 0.66:
-		s := (t - 0.33) / 0.33
-		return lerp(120, 255, s), lerp(80, 0, s), lerp(255, 200, s)
-	default:
-		s := (t - 0.66) / 0.34
-		return lerp(255, 255, s), lerp(0, 150, s), lerp(200, 50, s)
+	case t < 0.33: s := t / 0.33; return lerp(0, 120, s), lerp(200, 80, s), lerp(255, 255, s)
+	case t < 0.66: s := (t - 0.33) / 0.33; return lerp(120, 255, s), lerp(80, 0, s), lerp(255, 200, s)
+	default: s := (t - 0.66) / 0.34; return lerp(255, 255, s), lerp(0, 150, s), lerp(200, 50, s)
 	}
 }
 
