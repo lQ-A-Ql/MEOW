@@ -11,11 +11,18 @@ case "$PACKAGE_FORMAT" in
     command -v rpm2cpio >/dev/null || { echo "[ERROR] missing rpm2cpio" >&2; exit 26; }
     command -v cpio >/dev/null || { echo "[ERROR] missing cpio" >&2; exit 27; }
     echo "VOLSYM_EXTRACT_TOTAL=1"
-    ( cd "$WORK_DIR/extract" && rpm2cpio "$DEBUG_PACKAGE" | cpio -idmv ) 2>&1 | while IFS= read -r extracted; do
-      if [ -n "$extracted" ]; then
-        echo "VOLSYM_EXTRACT_FILE=1/1:$extracted"
-      fi
-    done
+    _extract_log="$(mktemp)"
+    if ( cd "$WORK_DIR/extract" && rpm2cpio "$DEBUG_PACKAGE" | cpio -idmv ) 2>&1 > "$_extract_log"; then
+      while IFS= read -r extracted; do
+        [ -n "$extracted" ] && echo "VOLSYM_EXTRACT_FILE=1/1:$extracted"
+      done < "$_extract_log"
+    else
+      echo "[ERROR] rpm extraction failed (code $?)" >&2
+      cat "$_extract_log" >&2 || true
+      rm -f "$_extract_log"
+      exit 29
+    fi
+    rm -f "$_extract_log"
     ;;
   deb|ddeb|unknown|"")
     command -v dpkg-deb >/dev/null || { echo "[ERROR] missing dpkg-deb" >&2; exit 20; }
@@ -23,12 +30,21 @@ case "$PACKAGE_FORMAT" in
     EXTRACT_TOTAL="$(dpkg-deb -c "$DEBUG_PACKAGE" | awk '$1 !~ /^d/ { count++ } END { print count + 0 }')"
     echo "VOLSYM_EXTRACT_TOTAL=$EXTRACT_TOTAL"
     EXTRACT_CURRENT=0
-    dpkg-deb --fsys-tarfile "$DEBUG_PACKAGE" | tar -xvf - -C "$WORK_DIR/extract" | while IFS= read -r extracted; do
-      if [ -n "$extracted" ] && [ "${extracted%/}" = "$extracted" ]; then
-        EXTRACT_CURRENT=$((EXTRACT_CURRENT + 1))
-        echo "VOLSYM_EXTRACT_FILE=$EXTRACT_CURRENT/$EXTRACT_TOTAL:$extracted"
-      fi
-    done
+    _extract_log="$(mktemp)"
+    if dpkg-deb --fsys-tarfile "$DEBUG_PACKAGE" | tar -xvf - -C "$WORK_DIR/extract" > "$_extract_log"; then
+      while IFS= read -r extracted; do
+        if [ -n "$extracted" ] && [ "${extracted%/}" = "$extracted" ]; then
+          EXTRACT_CURRENT=$((EXTRACT_CURRENT + 1))
+          echo "VOLSYM_EXTRACT_FILE=$EXTRACT_CURRENT/$EXTRACT_TOTAL:$extracted"
+        fi
+      done < "$_extract_log"
+    else
+      echo "[ERROR] deb extraction failed (code $?)" >&2
+      cat "$_extract_log" >&2 || true
+      rm -f "$_extract_log"
+      exit 30
+    fi
+    rm -f "$_extract_log"
     ;;
   *)
     echo "[ERROR] unsupported debug package format: $PACKAGE_FORMAT" >&2

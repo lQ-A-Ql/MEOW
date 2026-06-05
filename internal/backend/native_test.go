@@ -46,7 +46,7 @@ func TestNativeBashUsesNonInteractiveCleanBash(t *testing.T) {
 }
 
 func TestDDEBBuildScriptEmitsProgressStages(t *testing.T) {
-	script := ddebBuildScript()
+	script := debugPackageBuildScript()
 	for _, stage := range []string{
 		"VOLSYM_STAGE=extract",
 		"VOLSYM_EXTRACT_TOTAL=",

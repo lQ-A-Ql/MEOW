@@ -46,5 +46,6 @@ export type AppState = {
   lastBuildResult?: unknown
   lastVolOutput?: string
   lastDoctorResult?: unknown
+  lastVerifyResult?: unknown
   lastCacheResult?: unknown
 }

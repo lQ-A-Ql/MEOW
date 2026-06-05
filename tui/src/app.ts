@@ -119,7 +119,7 @@ export async function startApp() {
             onStdout: (c) => appendStreamLog("stdout", c),
             onStderr: (c) => appendStreamLog("stderr", c),
           })
-          return { ...state, lastDoctorResult: data }
+          return { ...state, lastVerifyResult: data }
         },
       }
 

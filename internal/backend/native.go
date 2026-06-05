@@ -218,10 +218,6 @@ func lookPathWithContext(ctx context.Context, name string) (string, error) {
 	}
 }
 
-func ddebBuildScript() string {
-	return debugPackageScript
-}
-
 func debugPackageBuildScript() string {
 	return debugPackageScript
 }
