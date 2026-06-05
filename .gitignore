@@ -1,0 +1,10 @@
+# Binaries
+meow
+meow.exe
+
+# Node
+node_modules/
+
+# Claude Code / OMC working dirs
+.claude/
+.omc/
