@@ -73,6 +73,19 @@ type buildSummary struct {
 	SymbolSources  []string `json:"symbol_sources,omitempty"`
 }
 
+type buildInput struct {
+	info          bannerpkg.KernelInfo
+	sourcePackage string
+	candidates    []string
+	foundURL      string
+	cacheHit      bool
+	symbolSource  string
+	packageFormat string
+	supportLevel  string
+	manualReason  string
+	sourceNames   []string
+}
+
 func init() {
 	fs := Register("build", "生成/下载 Volatility 3 Linux ISF 符号表", runBuild)
 	fs.StringVar(&buildBanner, "banner", "", "直接传入 banner 字符串")
@@ -140,17 +153,12 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		}
 	}
 
-	info, sourcePackage, candidates, foundURL, cacheHit, symbolSource, packageFormat, supportLevel, manualReason, sourceNames, err := resolveBuildInput(ctx, jsonMode)
+	input, err := resolveBuildInput(ctx, jsonMode)
 	if err != nil {
-		return partialSummary(info, candidates, foundURL, "", symbolSource, packageFormat, supportLevel, manualReason, sourceNames), err
+		return input.toSummary(), err
 	}
-	if !buildDryRun {
-		if err := cachepkg.EnsureLayout(buildCacheDir); err != nil {
-			return nil, fmt.Errorf("初始化缓存目录失败: %w", err)
-		}
-	}
-	if !buildDryRun && sourcePackage != "" {
-		if _, err := os.Stat(sourcePackage); err != nil {
+	if !buildDryRun && input.sourcePackage != "" {
+		if _, err := os.Stat(input.sourcePackage); err != nil {
 			return nil, fmt.Errorf("debug package 文件不可用: %w", err)
 		}
 	}
@@ -160,14 +168,14 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		}
 	}
 
-	info = symbols.MergeManual(&info, buildDistro, buildKernel, buildPkgver, buildArch)
+	info := symbols.MergeManual(&input.info, buildDistro, buildKernel, buildPkgver, buildArch)
 	symbolName := symbols.FileName(info)
 	symbolPath := filepath.Join(buildOut, symbolName)
-	if symbolSource == "remote_isf" {
-		if sourcePackage != "" {
-			symbolPath = sourcePackage
-		} else if foundURL != "" {
-			symbolPath = filepath.Join(buildOut, sourcespkg.SymbolFileName(foundURL))
+	if input.symbolSource == "remote_isf" {
+		if input.sourcePackage != "" {
+			symbolPath = input.sourcePackage
+		} else if input.foundURL != "" {
+			symbolPath = filepath.Join(buildOut, sourcespkg.SymbolFileName(input.foundURL))
 		}
 	}
 	summary := &buildSummary{
@@ -181,15 +189,15 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		Backend:        "linux_native",
 		OutputDir:      buildOut,
 		SymbolPath:     symbolPath,
-		PackagePath:    sourcePackage,
-		FoundURL:       foundURL,
-		Candidates:     candidates,
-		CacheHit:       cacheHit,
-		SymbolSource:   symbolSource,
-		PackageFormat:  packageFormat,
-		SupportLevel:   supportLevel,
-		ManualReason:   manualReason,
-		SymbolSources:  sourceNames,
+		PackagePath:    input.sourcePackage,
+		FoundURL:       input.foundURL,
+		Candidates:     input.candidates,
+		CacheHit:       input.cacheHit,
+		SymbolSource:   input.symbolSource,
+		PackageFormat:  input.packageFormat,
+		SupportLevel:   input.supportLevel,
+		ManualReason:   input.manualReason,
+		SymbolSources:  input.sourceNames,
 	}
 
 	if buildDryRun {
@@ -197,11 +205,11 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		return summary, nil
 	}
 
-	if symbolSource == "remote_isf" {
-		if sourcePackage == "" {
+	if input.symbolSource == "remote_isf" {
+		if input.sourcePackage == "" {
 			return summary, fmt.Errorf("远程符号源命中但未得到本地符号路径")
 		}
-		summary.SymbolPath = sourcePackage
+		summary.SymbolPath = input.sourcePackage
 		summary.Success = true
 		if !jsonMode {
 			log.Success("远程符号表已下载")
@@ -224,8 +232,8 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 	}
 
 	req := backendpkg.BuildRequest{
-		DDEBPath:       sourcePackage,
-		PackageFormat:  packageFormat,
+		DDEBPath:       input.sourcePackage,
+		PackageFormat:  input.packageFormat,
 		VmlinuxPath:    buildVMLINUX,
 		Kernel:         info.KernelRelease,
 		PackageVersion: info.PackageVersion,
@@ -259,7 +267,7 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 		return summary, nil
 	}
 
-	if sourcePackage == "" {
+	if input.sourcePackage == "" {
 		return summary, fmt.Errorf("缺少 debug package 输入；可使用 --debug-package、--debug-package-url、--ddeb、--ddeb-url、--banner 或 --banner-file")
 	}
 	if !jsonMode {
@@ -275,23 +283,62 @@ func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {
 	return summary, nil
 }
 
-func resolveBuildInput(ctx context.Context, jsonMode bool) (bannerpkg.KernelInfo, string, []string, string, bool, string, string, string, string, []string, error) {
+func (bi *buildInput) toSummary() *buildSummary {
+	return &buildSummary{
+		Success:        false,
+		DryRun:         buildDryRun,
+		Distro:         bi.info.Distro,
+		Codename:       bi.info.Codename,
+		Kernel:         bi.info.KernelRelease,
+		PackageVersion: bi.info.PackageVersion,
+		Arch:           bi.info.Arch,
+		Backend:        "linux_native",
+		OutputDir:      buildOut,
+		SymbolPath:     "",
+		FoundURL:       bi.foundURL,
+		Candidates:     bi.candidates,
+		SymbolSource:   bi.symbolSource,
+		PackageFormat:  bi.packageFormat,
+		SupportLevel:   bi.supportLevel,
+		ManualReason:   bi.manualReason,
+		SymbolSources:  bi.sourceNames,
+	}
+}
+
+func resolveBuildInput(ctx context.Context, jsonMode bool) (buildInput, error) {
 	debugPackage := firstNonEmpty(buildDebugPackage, buildDDEB)
 	switch {
 	case buildVMLINUX != "":
 		info := symbols.MergeManual(symbols.InferFromVMLINUX(buildVMLINUX), buildDistro, buildKernel, buildPkgver, buildArch)
-		return info, "", nil, "", false, "manual", resolver.FormatVMLINUX, resolver.SupportVMLINUXOnly, "", nil, nil
+		return buildInput{
+			info:          info,
+			symbolSource:  "manual",
+			packageFormat: resolver.FormatVMLINUX,
+			supportLevel:  resolver.SupportVMLINUXOnly,
+		}, nil
 	case debugPackage != "":
 		info, _ := symbols.InferFromDDEB(debugPackage)
 		merged := symbols.MergeManual(info, buildDistro, buildKernel, buildPkgver, buildArch)
 		if merged.KernelRelease == "" || merged.PackageVersion == "" {
-			return merged, debugPackage, nil, "", false, "manual", resolver.FormatUnknown, resolver.SupportManualPackage, "", nil, fmt.Errorf("无法从 debug package 文件名推断 kernel/pkgver；请指定 --kernel 和 --pkgver")
+			return buildInput{
+				info:          merged,
+				sourcePackage: debugPackage,
+				symbolSource:  "manual",
+				packageFormat: resolver.FormatUnknown,
+				supportLevel:  resolver.SupportManualPackage,
+			}, fmt.Errorf("无法从 debug package 文件名推断 kernel/pkgver；请指定 --kernel 和 --pkgver")
 		}
-		return merged, debugPackage, nil, "", false, "manual", symbols.PackageFormat(debugPackage), resolver.SupportManualPackage, "", nil, nil
+		return buildInput{
+			info:          merged,
+			sourcePackage: debugPackage,
+			symbolSource:  "manual",
+			packageFormat: symbols.PackageFormat(debugPackage),
+			supportLevel:  resolver.SupportManualPackage,
+		}, nil
 	case buildBanner != "" || buildBannerFile != "":
 		info, err := parseBuildBanner()
 		if err != nil {
-			return bannerpkg.KernelInfo{}, "", nil, "", false, "", "", "", "", nil, err
+			return buildInput{}, err
 		}
 		return resolveAndDownload(ctx, *info, jsonMode)
 	case buildMem != "":
@@ -300,11 +347,11 @@ func resolveBuildInput(ctx context.Context, jsonMode bool) (bannerpkg.KernelInfo
 		}
 		text, _, err := volatility.ExtractBanner(ctx, buildVolPath, buildMem)
 		if err != nil {
-			return bannerpkg.KernelInfo{}, "", nil, "", false, "", "", "", "", nil, err
+			return buildInput{}, err
 		}
 		info, err := bannerpkg.ParseBanner(text)
 		if err != nil {
-			return *info, "", nil, "", false, "", "", "", "", nil, err
+			return buildInput{info: *info}, err
 		}
 		return resolveAndDownload(ctx, *info, jsonMode)
 	default:
@@ -312,11 +359,11 @@ func resolveBuildInput(ctx context.Context, jsonMode bool) (bannerpkg.KernelInfo
 		if info.KernelRelease == "" || info.PackageVersion == "" {
 			bannerText, err := readBannerFromTerminal(jsonMode)
 			if err != nil {
-				return info, "", nil, "", false, "", "", "", "", nil, fmt.Errorf("需要终端输入 banner，或使用 --vmlinux、--debug-package、--mem，或手工指定 --kernel + --pkgver: %w", err)
+				return buildInput{info: info}, fmt.Errorf("需要终端输入 banner，或使用 --vmlinux、--debug-package、--mem，或手工指定 --kernel + --pkgver: %w", err)
 			}
 			parsed, err := bannerpkg.ParseBanner(bannerText)
 			if err != nil {
-				return info, "", nil, "", false, "", "", "", "", nil, err
+				return buildInput{info: info}, err
 			}
 			return resolveAndDownload(ctx, *parsed, jsonMode)
 		}
@@ -335,11 +382,11 @@ func parseBuildBanner() (*bannerpkg.KernelInfo, error) {
 	return bannerpkg.ParseBanner(strings.TrimSpace(string(data)))
 }
 
-func resolveAndDownload(ctx context.Context, info bannerpkg.KernelInfo, jsonMode bool) (bannerpkg.KernelInfo, string, []string, string, bool, string, string, string, string, []string, error) {
+func resolveAndDownload(ctx context.Context, info bannerpkg.KernelInfo, jsonMode bool) (buildInput, error) {
 	info.Distro = strings.ToLower(info.Distro)
 	sources, sourceNames, err := loadSymbolSourcesForOutput(buildSymbolSources, buildNoRemoteSymbols)
 	if err != nil {
-		return info, "", nil, "", false, "", "", "", "", nil, err
+		return buildInput{info: info, sourceNames: sourceNames}, err
 	}
 	if !buildNoRemoteSymbols && info.Banner != "" {
 		match, warnings, err := sourcespkg.Find(ctx, &http.Client{Timeout: 20 * time.Second}, sources, info.Banner)
@@ -349,32 +396,68 @@ func resolveAndDownload(ctx context.Context, info bannerpkg.KernelInfo, jsonMode
 			}
 		}
 		if err != nil {
-			return info, "", nil, "", false, "", "", "", "", sourceNames, err
+			return buildInput{info: info, sourceNames: sourceNames}, err
 		}
 		if match != nil {
 			if buildDryRun {
-				return info, "", []string{match.URL}, match.URL, false, "remote_isf", resolver.FormatISF, resolver.SupportAutoDownload, "", sourceNames, nil
+				return buildInput{
+					info:          info,
+					candidates:    []string{match.URL},
+					foundURL:      match.URL,
+					symbolSource:  "remote_isf",
+					packageFormat: resolver.FormatISF,
+					supportLevel:  resolver.SupportAutoDownload,
+					sourceNames:   sourceNames,
+				}, nil
 			}
 			path, meta, err := downloadRemoteSymbol(ctx, match.URL, match.SymbolPath, jsonMode)
 			cacheHit := false
 			if meta != nil {
 				cacheHit = meta.CacheHit
 			}
-			return info, path, []string{match.URL}, match.URL, cacheHit, "remote_isf", resolver.FormatISF, resolver.SupportAutoDownload, "", sourceNames, err
+			return buildInput{
+				info:          info,
+				sourcePackage: path,
+				candidates:    []string{match.URL},
+				foundURL:      match.URL,
+				cacheHit:      cacheHit,
+				symbolSource:  "remote_isf",
+				packageFormat: resolver.FormatISF,
+				supportLevel:  resolver.SupportAutoDownload,
+				sourceNames:   sourceNames,
+			}, err
 		}
 	}
 
 	debugPackageURL := firstNonEmpty(buildDebugPackageURL, buildDDEBURL)
 	if debugPackageURL != "" {
 		if buildDryRun {
-			return info, "", []string{debugPackageURL}, debugPackageURL, false, "debug_package", symbols.PackageFormat(debugPackageURL), resolver.SupportManualPackage, "", sourceNames, nil
+			return buildInput{
+				info:          info,
+				candidates:    []string{debugPackageURL},
+				foundURL:      debugPackageURL,
+				symbolSource:  "debug_package",
+				packageFormat: symbols.PackageFormat(debugPackageURL),
+				supportLevel:  resolver.SupportManualPackage,
+				sourceNames:   sourceNames,
+			}, nil
 		}
 		path, meta, err := downloadPackage(ctx, debugPackageURL, jsonMode)
 		cacheHit := false
 		if meta != nil {
 			cacheHit = meta.CacheHit
 		}
-		return info, path, []string{debugPackageURL}, debugPackageURL, cacheHit, "debug_package", symbols.PackageFormat(debugPackageURL), resolver.SupportManualPackage, "", sourceNames, err
+		return buildInput{
+			info:          info,
+			sourcePackage: path,
+			candidates:    []string{debugPackageURL},
+			foundURL:      debugPackageURL,
+			cacheHit:      cacheHit,
+			symbolSource:  "debug_package",
+			packageFormat: symbols.PackageFormat(debugPackageURL),
+			supportLevel:  resolver.SupportManualPackage,
+			sourceNames:   sourceNames,
+		}, err
 	}
 
 	if buildRepoURL != "" {
@@ -389,17 +472,45 @@ func resolveAndDownload(ctx context.Context, info bannerpkg.KernelInfo, jsonMode
 		}
 		resolved, err := resolver.ResolveRpmRepo(repoCtx, &info, buildRepoURL, &http.Client{})
 		if err != nil {
-			return info, "", resolved.Candidates, "", false, "debug_package", resolved.PackageFormat, resolved.SupportLevel, resolved.ManualReason, sourceNames, fmt.Errorf("RPM repo 未找到对应 debug package: repo=%s reason=%w", buildRepoURL, err)
+			return buildInput{
+				info:          info,
+				candidates:    resolved.Candidates,
+				symbolSource:  "debug_package",
+				packageFormat: resolved.PackageFormat,
+				supportLevel:  resolved.SupportLevel,
+				manualReason:  resolved.ManualReason,
+				sourceNames:   sourceNames,
+			}, fmt.Errorf("RPM repo 未找到对应 debug package: repo=%s reason=%w", buildRepoURL, err)
 		}
 		if buildDryRun {
-			return info, "", resolved.Candidates, resolved.FoundURL, false, "debug_package", resolved.PackageFormat, resolved.SupportLevel, resolved.ManualReason, sourceNames, nil
+			return buildInput{
+				info:          info,
+				candidates:    resolved.Candidates,
+				foundURL:      resolved.FoundURL,
+				symbolSource:  "debug_package",
+				packageFormat: resolved.PackageFormat,
+				supportLevel:  resolved.SupportLevel,
+				manualReason:  resolved.ManualReason,
+				sourceNames:   sourceNames,
+			}, nil
 		}
 		path, meta, err := downloadPackage(ctx, resolved.FoundURL, jsonMode)
 		cacheHit := false
 		if meta != nil {
 			cacheHit = meta.CacheHit
 		}
-		return info, path, resolved.Candidates, resolved.FoundURL, cacheHit, "debug_package", resolved.PackageFormat, resolved.SupportLevel, resolved.ManualReason, sourceNames, err
+		return buildInput{
+			info:          info,
+			sourcePackage: path,
+			candidates:    resolved.Candidates,
+			foundURL:      resolved.FoundURL,
+			cacheHit:      cacheHit,
+			symbolSource:  "debug_package",
+			packageFormat: resolved.PackageFormat,
+			supportLevel:  resolved.SupportLevel,
+			manualReason:  resolved.ManualReason,
+			sourceNames:   sourceNames,
+		}, err
 	}
 
 	result := resolver.GenerateCandidates(&info)
@@ -407,10 +518,25 @@ func resolveAndDownload(ctx context.Context, info bannerpkg.KernelInfo, jsonMode
 		log.Info("解析 %s debug package 候选", info.Distro)
 	}
 	if buildDryRun {
-		return info, "", result.Candidates, "", false, "debug_package", result.PackageFormat, result.SupportLevel, result.ManualReason, sourceNames, nil
+		return buildInput{
+			info:          info,
+			candidates:    result.Candidates,
+			symbolSource:  "debug_package",
+			packageFormat: result.PackageFormat,
+			supportLevel:  result.SupportLevel,
+			manualReason:  result.ManualReason,
+			sourceNames:   sourceNames,
+		}, nil
 	}
 	if len(result.Candidates) == 0 {
-		return info, "", nil, "", false, "manual", result.PackageFormat, result.SupportLevel, result.ManualReason, sourceNames, fmt.Errorf("%s 暂不支持自动定位 debug package；请使用 --vmlinux、--debug-package-url 或 --debug-package", info.Distro)
+		return buildInput{
+			info:          info,
+			symbolSource:  "manual",
+			packageFormat: result.PackageFormat,
+			supportLevel:  result.SupportLevel,
+			manualReason:  result.ManualReason,
+			sourceNames:   sourceNames,
+		}, fmt.Errorf("%s 暂不支持自动定位 debug package；请使用 --vmlinux、--debug-package-url 或 --debug-package", info.Distro)
 	}
 
 	if !jsonMode {
@@ -428,7 +554,15 @@ func resolveAndDownload(ctx context.Context, info bannerpkg.KernelInfo, jsonMode
 		probeProgress(resolver.ProbeEvent{})
 	}
 	if err != nil {
-		return info, "", result.Candidates, "", false, "debug_package", result.PackageFormat, result.SupportLevel, result.ManualReason, sourceNames, fmt.Errorf("未找到对应 debug symbol 包: timeout=%s reason=%w；可重试、使用 --probe-timeout 2m，或用 --debug-package-url / --debug-package 手工指定", buildProbeTimeout, err)
+		return buildInput{
+			info:          info,
+			candidates:    result.Candidates,
+			symbolSource:  "debug_package",
+			packageFormat: result.PackageFormat,
+			supportLevel:  result.SupportLevel,
+			manualReason:  result.ManualReason,
+			sourceNames:   sourceNames,
+		}, fmt.Errorf("未找到对应 debug symbol 包: timeout=%s reason=%w；可重试、使用 --probe-timeout 2m，或用 --debug-package-url / --debug-package 手工指定", buildProbeTimeout, err)
 	}
 
 	filePath, meta, err := downloadPackage(ctx, resolved.FoundURL, jsonMode)
@@ -436,7 +570,18 @@ func resolveAndDownload(ctx context.Context, info bannerpkg.KernelInfo, jsonMode
 	if meta != nil {
 		cacheHit = meta.CacheHit
 	}
-	return info, filePath, resolved.Candidates, resolved.FoundURL, cacheHit, "debug_package", resolved.PackageFormat, resolved.SupportLevel, resolved.ManualReason, sourceNames, err
+	return buildInput{
+		info:          info,
+		sourcePackage: filePath,
+		candidates:    resolved.Candidates,
+		foundURL:      resolved.FoundURL,
+		cacheHit:      cacheHit,
+		symbolSource:  "debug_package",
+		packageFormat: resolved.PackageFormat,
+		supportLevel:  resolved.SupportLevel,
+		manualReason:  resolved.ManualReason,
+		sourceNames:   sourceNames,
+	}, err
 }
 
 func downloadPackage(ctx context.Context, rawURL string, jsonMode bool) (string, *cachepkg.DownloadMeta, error) {
@@ -481,28 +626,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func partialSummary(info bannerpkg.KernelInfo, candidates []string, foundURL, symbolPath, symbolSource, packageFormat, supportLevel, manualReason string, sourceNames []string) *buildSummary {
-	return &buildSummary{
-		Success:        false,
-		DryRun:         buildDryRun,
-		Distro:         info.Distro,
-		Codename:       info.Codename,
-		Kernel:         info.KernelRelease,
-		PackageVersion: info.PackageVersion,
-		Arch:           info.Arch,
-		Backend:        "linux_native",
-		OutputDir:      buildOut,
-		SymbolPath:     symbolPath,
-		FoundURL:       foundURL,
-		Candidates:     candidates,
-		SymbolSource:   symbolSource,
-		PackageFormat:  packageFormat,
-		SupportLevel:   supportLevel,
-		ManualReason:   manualReason,
-		SymbolSources:  sourceNames,
-	}
 }
 
 func printBuildJSON(summary *buildSummary, err error) {

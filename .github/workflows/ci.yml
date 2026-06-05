@@ -25,6 +25,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg-dev xz-utils rpm2cpio cpio zstd gzip tar
 
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
       - name: Unit tests
         run: go test ./...
 

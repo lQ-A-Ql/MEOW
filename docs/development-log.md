@@ -745,3 +745,34 @@
 - 旧自动化脚本若仍传 `--backend` 或 `--wsl-distro` 将直接报 `flag provided but not defined`，需要手工迁移脚本参数。
 - CI 当前按方案只做单元与干跑烟测，不覆盖真实大包下载/解包/`dwarf2json` 全链路。
 - `winres` 与 Windows 图标资源文件仍保留在仓库中，但不纳入 Linux CI 运行路径。
+
+## 2026-05-15 23:20 CST - Codex
+
+### 文档评审
+
+- 本轮开始已读取 `docs/development-log.md`、`README.md`、`PRD.md` 与当前源码。
+- `README.md` 已明确当前版本是 Linux 原生运行，并写清非 Linux 构建链路会失败。
+- `PRD.md` 仍大量保留早期 Windows/WSL MVP 描述，和当前 Linux-only 实现存在明显冲突；建议后续将其标记为历史 PRD，或新增/重写当前 Linux 原生版 PRD，避免后续开发误按旧 WSL 方案验收。
+
+### 审计结论
+
+- 高风险：`cache clear --cache-dir <path>` 最终会对用户传入路径执行递归删除；当前只拒绝空路径、`.` 和根目录，仍可能误删 `$HOME`、项目目录或其他非缓存目录。
+- 高风险：debug package 解包依赖 `tar` / `cpio` 直接落盘，当前没有对包内成员路径做显式校验；若用户使用不可信 `--debug-package-url` 或恶意 repo，存在路径穿越/覆盖工作目录外文件的风险，需要在解包前拒绝绝对路径与 `..` 成员，或改为安全解包实现。
+- 中风险：远程符号源索引和 RPM metadata 使用 `io.ReadAll` 无大小上限；恶意或异常大的 `symbol-sources.txt` / `--repo-url` 响应可能导致内存耗尽。
+- 中风险：`repomd.xml` 中 `primary_db` 会被当成可用 primary metadata，但后续只按 XML/`.gz` 解析，若仓库优先返回 SQLite primary DB 会解析失败。
+- 低风险：`config init/show` 目前只创建和展示配置，`build/parse/cache/verify` 并未读取 `config.json` 中的默认值；用户可能以为配置已生效。
+- 低风险：`doctor` 当前不检查 `vol`，但 `verify` 实际依赖 Volatility 3；普通输出中的 verify 可用性判断容易误导。
+- 仓库卫生：当前工作区已有非本轮产生的删除状态 `appicon.png`、`meow.exe`，且仓库跟踪了 Linux ELF 构建产物 `meow` 与 Windows 资源/二进制相关文件；后续建议决定是否保留发布制品在源码仓库中，并补充 `.gitignore`。
+
+### 测试
+
+- `go test ./...`
+- `go vet ./...`
+- `go run . --json parse --banner-file testdata\banners\ubuntu_5.4.0_163.txt --no-remote-symbols`
+- `go run . --json build --dry-run --banner-file testdata\banners\ubuntu_5.4.0_163.txt --no-remote-symbols`：在 Windows 本地按 Linux-only 守卫返回 `当前版本仅支持 Linux 原生运行`，符合当前 README 支持范围。
+
+### 后续建议
+
+- 优先修复递归删除保护与安全解包边界，这两项最接近真实误操作/恶意输入风险。
+- 给远程索引和 RPM metadata 增加大小上限、内容类型/压缩格式约束与测试。
+- 决定 `config.json` 是要真正参与命令默认值，还是仅作为展示/模板；若暂不生效，应在 README 中说清。

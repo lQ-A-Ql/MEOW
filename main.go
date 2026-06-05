@@ -10,7 +10,7 @@ import (
 func main() {
 	jsonMode := false
 	for _, arg := range os.Args {
-		if arg == "--json" || arg == "-h" || arg == "--help" || arg == "-help" {
+		if arg == "--json" {
 			jsonMode = true
 			break
 		}

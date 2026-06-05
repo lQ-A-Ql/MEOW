@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ubuntuDdebBase = "http://ddebs.ubuntu.com/pool/main/l/linux"
+	ubuntuDdebBase = "https://ddebs.ubuntu.com/pool/main/l/linux"
 	debianDebBase  = "https://deb.debian.org/debian/pool/main/l/linux"
 )
 

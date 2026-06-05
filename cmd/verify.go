@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"meow/internal/log"
 	"meow/internal/volatility"
@@ -30,6 +31,10 @@ func runVerify(args []string) {
 	jsonMode := verifyJSON || JSONFlag
 	if verifyMem == "" {
 		verifyFail(jsonMode, "", fmt.Errorf("需要 --mem 参数"))
+	}
+
+	if _, err := exec.LookPath(verifyVolPath); err != nil {
+		verifyFail(jsonMode, "", fmt.Errorf("未找到 Volatility 3 (%s)；请确认 vol 命令在 PATH 中，或使用 --vol 参数指定路径", verifyVolPath))
 	}
 
 	output, err := volatility.Verify(context.Background(), verifyVolPath, verifyMem, verifySymbols)

@@ -24,7 +24,7 @@ func TestGenerateCandidates(t *testing.T) {
 
 	result := GenerateCandidates(info)
 
-	if result.RepoBase != "http://ddebs.ubuntu.com/pool/main/l/linux" {
+	if result.RepoBase != "https://ddebs.ubuntu.com/pool/main/l/linux" {
 		t.Errorf("RepoBase: got %q", result.RepoBase)
 	}
 
@@ -43,7 +43,7 @@ func TestGenerateCandidates(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("candidate[%d]: want to contain %q, got %q", i, want, got)
 		}
-		if !strings.HasPrefix(got, "http://ddebs.ubuntu.com/pool/main/l/linux/") {
+		if !strings.HasPrefix(got, "https://ddebs.ubuntu.com/pool/main/l/linux/") {
 			t.Errorf("candidate[%d] missing prefix: %q", i, got)
 		}
 	}
