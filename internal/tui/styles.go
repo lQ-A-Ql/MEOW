@@ -4,18 +4,18 @@ import "github.com/charmbracelet/lipgloss"
 
 var (
 	// Colors
-	bgColor       = lipgloss.Color("#0F172A")
-	borderColor   = lipgloss.Color("#334155")
-	accentColor   = lipgloss.Color("#60A5FA")
-	accentColor2  = lipgloss.Color("#A78BFA")
-	successColor  = lipgloss.Color("#34D399")
-	warnColor     = lipgloss.Color("#FBBF24")
-	errorColor    = lipgloss.Color("#EF4444")
-	mutedColor    = lipgloss.Color("#6B7280")
-	textColor     = lipgloss.Color("#D1D5DB")
-	brightColor   = lipgloss.Color("#E5E7EB")
-	stdoutColor   = lipgloss.Color("#93C5FD")
-	stderrColor   = lipgloss.Color("#FCA5A5")
+	bgColor      = lipgloss.Color("#0F172A")
+	borderColor  = lipgloss.Color("#334155")
+	accentColor  = lipgloss.Color("#60A5FA")
+	accentColor2 = lipgloss.Color("#A78BFA")
+	successColor = lipgloss.Color("#34D399")
+	warnColor    = lipgloss.Color("#FBBF24")
+	errorColor   = lipgloss.Color("#EF4444")
+	mutedColor   = lipgloss.Color("#6B7280")
+	textColor    = lipgloss.Color("#D1D5DB")
+	brightColor  = lipgloss.Color("#E5E7EB")
+	stdoutColor  = lipgloss.Color("#93C5FD")
+	stderrColor  = lipgloss.Color("#FCA5A5")
 
 	// Panel styles
 	panelStyle = lipgloss.NewStyle().

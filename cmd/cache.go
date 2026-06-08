@@ -11,19 +11,22 @@ import (
 )
 
 var (
-	cacheDir  string
-	cacheJSON bool
+	cacheDir   string
+	cacheJSON  bool
+	cacheForce bool
 )
 
 func init() {
-	fs := Register("cache", "查看/清理下载缓存", runCache)
-	fs.StringVar(&cacheDir, "cache-dir", cachepkg.DefaultDir(), "缓存目录")
-	fs.BoolVar(&cacheJSON, "json", false, "以 JSON 格式输出")
+	fs := Register("cache", "view or clear download cache", runCache)
+	fs.StringVar(&cacheDir, "cache-dir", cachepkg.DefaultDir(), "cache directory")
+	fs.BoolVar(&cacheForce, "force", false, "force clear custom cache dir")
+	fs.BoolVar(&cacheJSON, "json", false, "output JSON")
 }
 
 func runCache(args []string) {
 	args = absorbTrailingJSONFlag(args, &cacheJSON)
 	jsonMode := cacheJSON || JSONFlag
+	applyCacheConfigDefaults(jsonMode)
 	sub := "list"
 	if len(args) > 0 {
 		sub = args[0]
@@ -48,14 +51,14 @@ func runCache(args []string) {
 			return
 		}
 		if len(metas) == 0 {
-			log.Info("缓存为空: %s", cacheDir)
+			log.Info("cache is empty: %s", cacheDir)
 			return
 		}
 		for _, meta := range metas {
 			fmt.Printf("%s  %d bytes  %s\n", meta.Filename, meta.Size, meta.URL)
 		}
 	case "clear":
-		if err := cachepkg.Clear(cacheDir); err != nil {
+		if err := cachepkg.Clear(cacheDir, cacheForce); err != nil {
 			cacheFail(jsonMode, err)
 		}
 		if jsonMode {
@@ -63,9 +66,22 @@ func runCache(args []string) {
 			fmt.Println(string(data))
 			return
 		}
-		log.Success("缓存已清理: %s", cacheDir)
+		log.Success("cache cleared: %s", cacheDir)
 	default:
-		cacheFail(jsonMode, fmt.Errorf("未知 cache 子命令: %s", sub))
+		cacheFail(jsonMode, fmt.Errorf("unknown cache subcommand: %s", sub))
+	}
+}
+
+func applyCacheConfigDefaults(jsonMode bool) {
+	cfg, err := readOrDefaultConfig()
+	if err != nil {
+		if !jsonMode {
+			log.Warn("failed to read config defaults: %v", err)
+		}
+		return
+	}
+	if !flagWasSet(Commands["cache"].Flags, "cache-dir") {
+		cacheDir = cfg.CacheDir
 	}
 }
 

@@ -54,7 +54,7 @@ func (ls *LogStore) AppendChunk(level LogLevel, chunk string) {
 }
 
 func (ls *LogStore) Entries() []LogEntry {
-	return ls.entries
+	return append([]LogEntry(nil), ls.entries...)
 }
 
 func (ls *LogStore) Clear() {

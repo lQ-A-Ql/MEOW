@@ -10,11 +10,36 @@ case "$PACKAGE_FORMAT" in
   rpm)
     command -v rpm2cpio >/dev/null || { echo "[ERROR] missing rpm2cpio" >&2; exit 26; }
     command -v cpio >/dev/null || { echo "[ERROR] missing cpio" >&2; exit 27; }
-    echo "VOLSYM_EXTRACT_TOTAL=1"
+    _entry_log="$(mktemp)"
+    _entry_detail_log="$(mktemp)"
+    if rpm2cpio "$DEBUG_PACKAGE" | cpio -it > "$_entry_log"; then
+      validate_archive_entries "$_entry_log"
+    else
+      echo "[ERROR] rpm archive listing failed (code $?)" >&2
+      cat "$_entry_log" >&2 || true
+      rm -f "$_entry_log"
+      rm -f "$_entry_detail_log"
+      exit 33
+    fi
+    if rpm2cpio "$DEBUG_PACKAGE" | cpio -itv > "$_entry_detail_log"; then
+      validate_archive_entry_types "$_entry_detail_log"
+    else
+      echo "[ERROR] rpm archive detail listing failed (code $?)" >&2
+      cat "$_entry_detail_log" >&2 || true
+      rm -f "$_entry_log" "$_entry_detail_log"
+      exit 37
+    fi
+    EXTRACT_TOTAL="$(wc -l < "$_entry_log" | tr -d ' ')"
+    rm -f "$_entry_log" "$_entry_detail_log"
+    echo "VOLSYM_EXTRACT_TOTAL=$EXTRACT_TOTAL"
     _extract_log="$(mktemp)"
-    if ( cd "$WORK_DIR/extract" && rpm2cpio "$DEBUG_PACKAGE" | cpio -idmv ) 2>&1 > "$_extract_log"; then
+    if ( cd "$WORK_DIR/extract" && rpm2cpio "$DEBUG_PACKAGE" | cpio --no-absolute-filenames --no-preserve-owner -idmv ) 2>&1 > "$_extract_log"; then
+      EXTRACT_CURRENT=0
       while IFS= read -r extracted; do
-        [ -n "$extracted" ] && echo "VOLSYM_EXTRACT_FILE=1/1:$extracted"
+        if [ -n "$extracted" ]; then
+          EXTRACT_CURRENT=$((EXTRACT_CURRENT + 1))
+          echo "VOLSYM_EXTRACT_FILE=$EXTRACT_CURRENT/$EXTRACT_TOTAL:$extracted"
+        fi
       done < "$_extract_log"
     else
       echo "[ERROR] rpm extraction failed (code $?)" >&2
@@ -27,11 +52,30 @@ case "$PACKAGE_FORMAT" in
   deb|ddeb|unknown|"")
     command -v dpkg-deb >/dev/null || { echo "[ERROR] missing dpkg-deb" >&2; exit 20; }
     command -v tar >/dev/null || { echo "[ERROR] missing tar" >&2; exit 25; }
-    EXTRACT_TOTAL="$(dpkg-deb -c "$DEBUG_PACKAGE" | awk '$1 !~ /^d/ { count++ } END { print count + 0 }')"
+    _entry_log="$(mktemp)"
+    _entry_detail_log="$(mktemp)"
+    if dpkg-deb --fsys-tarfile "$DEBUG_PACKAGE" | tar -tf - > "$_entry_log"; then
+      validate_archive_entries "$_entry_log"
+    else
+      echo "[ERROR] deb archive listing failed (code $?)" >&2
+      cat "$_entry_log" >&2 || true
+      rm -f "$_entry_log" "$_entry_detail_log"
+      exit 34
+    fi
+    if dpkg-deb --fsys-tarfile "$DEBUG_PACKAGE" | tar -tvf - > "$_entry_detail_log"; then
+      validate_archive_entry_types "$_entry_detail_log"
+    else
+      echo "[ERROR] deb archive detail listing failed (code $?)" >&2
+      cat "$_entry_detail_log" >&2 || true
+      rm -f "$_entry_log" "$_entry_detail_log"
+      exit 38
+    fi
+    EXTRACT_TOTAL="$(awk 'length($0) && substr($0, length($0), 1) != "/" { count++ } END { print count + 0 }' "$_entry_log")"
+    rm -f "$_entry_log" "$_entry_detail_log"
     echo "VOLSYM_EXTRACT_TOTAL=$EXTRACT_TOTAL"
     EXTRACT_CURRENT=0
     _extract_log="$(mktemp)"
-    if dpkg-deb --fsys-tarfile "$DEBUG_PACKAGE" | tar -xvf - -C "$WORK_DIR/extract" > "$_extract_log"; then
+    if dpkg-deb --fsys-tarfile "$DEBUG_PACKAGE" | tar --no-same-owner --no-same-permissions -xvf - -C "$WORK_DIR/extract" > "$_extract_log"; then
       while IFS= read -r extracted; do
         if [ -n "$extracted" ] && [ "${extracted%/}" = "$extracted" ]; then
           EXTRACT_CURRENT=$((EXTRACT_CURRENT + 1))
@@ -70,6 +114,7 @@ if [ -z "$VMLINUX" ]; then
   find "$WORK_DIR/extract" -type f | head -n 50 >&2 || true
   exit 23
 fi
+ensure_path_under "$VMLINUX" "$WORK_DIR"
 case "$VMLINUX" in
   *.gz)
     command -v gzip >/dev/null || { echo "[ERROR] missing gzip" >&2; exit 29; }

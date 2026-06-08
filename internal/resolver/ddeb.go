@@ -1,7 +1,6 @@
 package resolver
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/xml"
@@ -17,8 +16,10 @@ import (
 )
 
 const (
-	ubuntuDdebBase = "https://ddebs.ubuntu.com/pool/main/l/linux"
-	debianDebBase  = "https://deb.debian.org/debian/pool/main/l/linux"
+	ubuntuDdebBase  = "https://ddebs.ubuntu.com/pool/main/l/linux"
+	debianDebBase   = "https://deb.debian.org/debian/pool/main/l/linux"
+	maxRepomdBytes  = 4 * 1024 * 1024
+	maxPrimaryBytes = 256 * 1024 * 1024
 )
 
 var ErrPackageNotFound = errors.New("未找到对应 debug symbol 包")
@@ -305,10 +306,6 @@ type repoMD struct {
 	} `xml:"data"`
 }
 
-type primaryMetadata struct {
-	Packages []rpmPackage `xml:"package"`
-}
-
 type rpmPackage struct {
 	Name     string `xml:"name"`
 	Arch     string `xml:"arch"`
@@ -319,7 +316,8 @@ type rpmPackage struct {
 }
 
 func fetchPrimaryMetadataURL(ctx context.Context, client *http.Client, repoURL string) (string, error) {
-	raw, err := fetchBytes(ctx, client, strings.TrimRight(repoURL, "/")+"/repodata/repomd.xml")
+	repomdURL := strings.TrimRight(repoURL, "/") + "/repodata/repomd.xml"
+	raw, err := fetchBytesLimited(ctx, client, repomdURL, maxRepomdBytes, "repomd.xml")
 	if err != nil {
 		return "", err
 	}
@@ -328,53 +326,136 @@ func fetchPrimaryMetadataURL(ctx context.Context, client *http.Client, repoURL s
 		return "", err
 	}
 	for _, data := range meta.Data {
-		if data.Type == "primary" || data.Type == "primary_db" {
+		if data.Type == "primary" {
 			return joinURL(repoURL, data.Location.Href), nil
+		}
+	}
+	for _, data := range meta.Data {
+		if data.Type == "primary_db" {
+			return "", fmt.Errorf("primary_db metadata is unsupported: %s", joinURL(repoURL, data.Location.Href))
 		}
 	}
 	return "", fmt.Errorf("primary metadata not found in repomd.xml")
 }
 
 func fetchPrimaryPackages(ctx context.Context, client *http.Client, primaryURL string) ([]rpmPackage, error) {
-	raw, err := fetchBytes(ctx, client, primaryURL)
+	reader, cleanup, err := fetchReaderLimited(ctx, client, primaryURL, maxPrimaryBytes, "primary metadata")
 	if err != nil {
 		return nil, err
 	}
+	defer cleanup()
 	if strings.HasSuffix(primaryURL, ".gz") {
-		reader, err := gzip.NewReader(bytes.NewReader(raw))
+		gzipReader, err := gzip.NewReader(reader)
 		if err != nil {
 			return nil, err
 		}
-		defer reader.Close()
-		raw, err = io.ReadAll(reader)
-		if err != nil {
-			return nil, err
-		}
+		defer gzipReader.Close()
+		reader = io.LimitReader(gzipReader, maxPrimaryBytes+1)
 	}
-	var meta primaryMetadata
-	if err := xml.Unmarshal(raw, &meta); err != nil {
+	packages, err := parsePrimaryPackages(reader, maxPrimaryBytes)
+	if err != nil {
 		return nil, err
 	}
-	for i := range meta.Packages {
-		meta.Packages[i].FileName = path.Base(meta.Packages[i].Location.Href)
+	for i := range packages {
+		packages[i].FileName = path.Base(packages[i].Location.Href)
 	}
-	return meta.Packages, nil
+	return packages, nil
 }
 
-func fetchBytes(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+func parsePrimaryPackages(reader io.Reader, limit int64) ([]rpmPackage, error) {
+	counting := &countingReader{reader: reader, limit: limit}
+	decoder := xml.NewDecoder(counting)
+	var packages []rpmPackage
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return packages, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "package" {
+			continue
+		}
+		var pkg rpmPackage
+		if err := decoder.DecodeElement(&pkg, &start); err != nil {
+			return nil, err
+		}
+		packages = append(packages, pkg)
+	}
+}
+
+func fetchBytesLimited(ctx context.Context, client *http.Client, rawURL string, limit int64, label string) ([]byte, error) {
+	reader, cleanup, err := fetchReaderLimited(ctx, client, rawURL, limit, label)
 	if err != nil {
 		return nil, err
+	}
+	defer cleanup()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func fetchReaderLimited(ctx context.Context, client *http.Client, rawURL string, limit int64, label string) (io.Reader, func(), error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer resp.Body.Close()
 	if !isSuccessStatus(resp.StatusCode) {
-		return nil, fmt.Errorf("metadata fetch failed: %s", resp.Status)
+		resp.Body.Close()
+		return nil, nil, fmt.Errorf("metadata fetch failed: %s", resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+	limited := &limitedErrorReader{reader: resp.Body, limit: limit, label: label, rawURL: rawURL}
+	return limited, func() { resp.Body.Close() }, nil
+}
+
+type limitedErrorReader struct {
+	reader io.Reader
+	limit  int64
+	read   int64
+	label  string
+	rawURL string
+}
+
+func (r *limitedErrorReader) Read(p []byte) (int, error) {
+	if r.read > r.limit {
+		return 0, fmt.Errorf("%s too large: url=%s limit=%d bytes", r.label, r.rawURL, r.limit)
+	}
+	remaining := r.limit + 1 - r.read
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	if r.read > r.limit {
+		return n, fmt.Errorf("%s too large: url=%s limit=%d bytes", r.label, r.rawURL, r.limit)
+	}
+	return n, err
+}
+
+type countingReader struct {
+	reader io.Reader
+	limit  int64
+	read   int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	if r.read > r.limit {
+		return 0, fmt.Errorf("primary metadata too large: limit=%d bytes", r.limit)
+	}
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	if r.read > r.limit {
+		return n, fmt.Errorf("primary metadata too large: limit=%d bytes", r.limit)
+	}
+	return n, err
 }
 
 func joinURL(base, href string) string {

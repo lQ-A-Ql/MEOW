@@ -45,10 +45,56 @@ func TestDownloadPathsAndMeta(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "downloads"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := Clear(root); err != nil {
+	if err := EnsureLayout(root); err != nil {
+		t.Fatalf("EnsureLayout: %v", err)
+	}
+	if err := Clear(root, false); err != nil {
 		t.Fatalf("Clear: %v", err)
 	}
 	if _, err := os.Stat(DownloadsDir(root)); err != nil {
 		t.Fatalf("expected downloads dir after clear: %v", err)
+	}
+	if _, err := os.Stat(SentinelPath(root)); err != nil {
+		t.Fatalf("expected sentinel after clear: %v", err)
+	}
+}
+
+func TestClearRefusesCustomDirWithoutSentinel(t *testing.T) {
+	root := t.TempDir()
+	if err := Clear(root, false); err == nil {
+		t.Fatal("expected custom dir without sentinel to be rejected")
+	}
+}
+
+func TestClearAllowsCustomDirWithForce(t *testing.T) {
+	root := t.TempDir()
+	if err := Clear(root, true); err != nil {
+		t.Fatalf("Clear force: %v", err)
+	}
+	if _, err := os.Stat(SentinelPath(root)); err != nil {
+		t.Fatalf("expected sentinel after force clear: %v", err)
+	}
+}
+
+func TestClearRefusesCurrentWorkingDirectoryEvenWithForce(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Clear(cwd, true); err == nil {
+		t.Fatal("expected cwd to be rejected")
+	}
+}
+
+func TestClearRefusesCurrentWorkingDirectoryAncestorEvenWithForce(t *testing.T) {
+	parent := t.TempDir()
+	child := filepath.Join(parent, "workspace")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(child)
+
+	if err := validateClearRoot(parent, true); err == nil {
+		t.Fatal("expected cwd ancestor to be rejected")
 	}
 }

@@ -52,9 +52,11 @@ func runDoctor(args []string) {
 			}
 		} else {
 			log.Warn("%s: %s", check.Name, check.Detail)
-			buildOK = false
+			if check.Name != "vol" {
+				buildOK = false
+			}
 		}
-		if check.Name == "dwarf2json" && check.OK {
+		if check.Name == "vol" && check.OK {
 			verifyOK = true
 		}
 	}

@@ -13,7 +13,7 @@ type PluginCategory struct {
 
 var PluginCategories = []PluginCategory{
 	{
-		Name: "Linux", Icon: "🐧",
+		Name: "Linux", Icon: "LIN",
 		Plugins: []PluginEntry{
 			{"linux.pslist.PsList", "列出所有进程 (EPROCESS)"},
 			{"linux.pstree.PsTree", "树状结构显示进程关系"},
@@ -30,7 +30,7 @@ var PluginCategories = []PluginCategory{
 		},
 	},
 	{
-		Name: "通用", Icon: "🔧",
+		Name: "General", Icon: "GEN",
 		Plugins: []PluginEntry{
 			{"banners.Banners", "提取内核 banner 信息"},
 			{"isfinfo.IsfInfo", "显示 ISF 符号文件信息"},

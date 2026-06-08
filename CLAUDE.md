@@ -4,12 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+Backend Go CLI:
+
 - Build the CLI: `go build -o meow .`
-- Run all tests: `go test ./...`
+- Run all Go tests: `go test ./...`
 - Run a single package test: `go test ./internal/resolver -run TestGenerateCandidates -v`
 - Run one named test in `cmd`: `go test ./cmd -run TestFormatDownloadProgressUsesStablePixelCat -v`
 - Lint with the repository config: `golangci-lint run ./...`
 - Format Go code before linting: `gofmt -w $(git ls-files '*.go')`; run `goimports -w $(git ls-files '*.go')` if imports changed (`.golangci.yml` enforces goimports with local prefix `meow`).
+
+Go TUI:
+
+- Run the TUI: `go run . tui`
+- Run Go TUI tests: `go test ./internal/tui ./cmd`
 
 Smoke commands from CI/README:
 
@@ -19,11 +26,11 @@ Smoke commands from CI/README:
 - Check runtime dependencies on Linux: `./meow doctor`
 - Verify generated symbols with Volatility 3: `./meow verify --mem ./memdump.mem --symbols ./symbols`
 
-`build` and `doctor` intentionally fail on non-Linux hosts (`当前版本仅支持 Linux 原生运行`). `parse`, `cache`, and `config` are safe to run while developing on Windows, but CI executes on Ubuntu.
+`build` and `doctor` intentionally fail on non-Linux hosts (`当前版本仅支持 Linux 原生运行`). `parse`, `cache`, `config`, and Go TUI unit tests are safe to run while developing on Windows, but CI executes on Ubuntu.
 
 ## Runtime dependencies and paths
 
-The current implementation is Linux-native and no longer uses `wsl.exe` or the legacy `--backend` / `--wsl-distro` flags. For symbol generation, Linux needs `bash`, `dpkg-deb`, `tar`, `xz`, `dwarf2json`, `rpm2cpio`, `cpio`, `gzip`, and `zstd`; `verify` and `build --mem` also need Volatility 3 as `vol` or via `--vol`.
+The Go module is `meow` and currently targets Go `1.26.0`. The implementation is Linux-native and no longer uses `wsl.exe` or the legacy `--backend` / `--wsl-distro` flags. For symbol generation, Linux needs `bash`, `dpkg-deb`, `tar`, `xz`, `dwarf2json`, `rpm2cpio`, `cpio`, `gzip`, and `zstd`; `verify` and `build --mem` also need Volatility 3 as `vol` or via `--vol`.
 
 Default user state lives under `$HOME/.meow`:
 
@@ -48,9 +55,12 @@ The primary build flow is:
 7. `internal/backend.Native` embeds `internal/backend/scripts/debug_package.sh` and `vmlinux.sh`, then runs them through clean `bash --noprofile --norc -c`. The scripts extract `.ddeb`/`.deb`/`.rpm` packages, find or decompress `vmlinux`, run `dwarf2json linux --elf`, compress with `xz`, and move the final `${Distro}_${Kernel}_${PackageVersion}_${Arch}.json.xz` into the output directory.
 8. `cmd/progress.go` renders the terminal progress UI from backend marker lines such as `VOLSYM_STAGE=...` and `VOLSYM_EXTRACT_*`. JSON mode must keep stdout pure JSON, so logo and progress output stay disabled there.
 
+The TUI lives in `internal/tui` and is launched by `meow tui` from `cmd/tui.go`. It uses Bubble Tea, parses slash-style commands, invokes `meow --json` and `vol` through argv-only subprocess calls, and focuses on the Linux symbol workflow: doctor -> preflight -> build -> verify. The historical Bun/OpenTUI `tui/` project has been removed.
+
 ## Repository notes
 
 - `README.md` is the current user-facing behavior reference. `PRD.md` still contains older Windows/WSL backend language; treat the code and README as authoritative for current Linux-native behavior.
 - The output filename format is centralized in `internal/symbols.FileName`; tests expect it to include distro, kernel, package version, and arch.
 - `testdata/banners/` contains the banner fixtures used by smoke tests and parser/resolver tests.
-- No `.cursor/rules`, `.cursorrules`, or `.github/copilot-instructions.md` files are present in this repository at the time this file was created.
+- CI has docs and backend jobs. Backend runs golangci-lint, `go test ./...`, coverage/race gates, `go build -o meow .`, and smoke commands; Go TUI tests are covered by the backend test job.
+- No `.cursor/rules`, `.cursorrules`, or `.github/copilot-instructions.md` files are present in this repository at the time this file was updated.

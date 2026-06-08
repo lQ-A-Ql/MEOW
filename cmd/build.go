@@ -117,6 +117,7 @@ func init() {
 func runBuild(args []string) {
 	start := time.Now()
 	jsonMode := buildJSON || JSONFlag
+	applyBuildConfigDefaults(jsonMode)
 
 	summary, err := build(context.Background(), jsonMode)
 	if summary != nil {
@@ -138,6 +139,32 @@ func runBuild(args []string) {
 		return
 	}
 	printBuildSuccess(summary)
+}
+
+func applyBuildConfigDefaults(jsonMode bool) {
+	cfg, err := readOrDefaultConfig()
+	if err != nil {
+		if !jsonMode {
+			log.Warn("failed to read config defaults: %v", err)
+		}
+		return
+	}
+	fs := Commands["build"].Flags
+	if !flagWasSet(fs, "cache-dir") {
+		buildCacheDir = cfg.CacheDir
+	}
+	if !flagWasSet(fs, "out") {
+		buildOut = cfg.OutputDir
+	}
+	if !flagWasSet(fs, "symbol-sources") {
+		buildSymbolSources = cfg.SymbolSourcesPath
+	}
+	if !flagWasSet(fs, "vol") {
+		buildVolPath = cfg.VolatilityPath
+	}
+	if !flagWasSet(fs, "download-timeout") && cfg.DownloadTimeoutSeconds > 0 {
+		buildDownloadTimeout = time.Duration(cfg.DownloadTimeoutSeconds) * time.Second
+	}
 }
 
 func build(ctx context.Context, jsonMode bool) (*buildSummary, error) {

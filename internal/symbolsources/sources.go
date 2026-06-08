@@ -18,6 +18,7 @@ const (
 	DefaultName     = "abyss"
 	DefaultIndexURL = "https://raw.githubusercontent.com/Abyss-W4tcher/volatility3-symbols/master/banners/banners_plain.json"
 	DefaultRawBase  = "https://raw.githubusercontent.com/Abyss-W4tcher/volatility3-symbols/master/"
+	MaxIndexBytes   = 64 * 1024 * 1024
 )
 
 type Source struct {
@@ -127,7 +128,7 @@ func findInSource(ctx context.Context, client *http.Client, src Source, banner s
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("index fetch failed: %s", resp.Status)
 	}
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readLimited(resp.Body, MaxIndexBytes, "symbol source index", src.IndexURL)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +146,17 @@ func findInSource(ctx context.Context, client *http.Client, src Source, banner s
 		SymbolPath: relative,
 		URL:        JoinRawURL(src.RawBaseURL, relative),
 	}, nil
+}
+
+func readLimited(reader io.Reader, limit int64, label, rawURL string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s too large: url=%s limit=%d bytes", label, rawURL, limit)
+	}
+	return data, nil
 }
 
 func JoinRawURL(base, relative string) string {

@@ -4,79 +4,121 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 	"sync"
+	"time"
 )
 
-// runStream executes a command and returns combined output.
-// It streams stdout/stderr line by line via the returned channel.
-func runStream(ctx context.Context, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+type StreamType string
+
+const (
+	StreamStdout StreamType = "stdout"
+	StreamStderr StreamType = "stderr"
+)
+
+type CommandResult struct {
+	Command  string
+	Args     []string
+	Code     int
+	Stdout   string
+	Stderr   string
+	Duration time.Duration
+}
+
+type StreamCallback func(StreamType, string)
+
+type Runner interface {
+	Run(ctx context.Context, command string, args []string, onLine StreamCallback) (CommandResult, error)
+}
+
+type ExecRunner struct{}
+
+func (ExecRunner) Run(ctx context.Context, command string, args []string, onLine StreamCallback) (CommandResult, error) {
+	start := time.Now()
+	cmd := exec.CommandContext(ctx, command, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("stdout pipe: %w", err)
+		return CommandResult{}, fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return "", fmt.Errorf("stderr pipe: %w", err)
+		return CommandResult{}, fmt.Errorf("stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return CommandResult{}, fmt.Errorf("start %s: %w", command, err)
 	}
 
 	var (
-		buf  bytes.Buffer
-		mu   sync.Mutex
-		errs []error
+		stdoutBuf bytes.Buffer
+		stderrBuf bytes.Buffer
+		scanErrs  []error
+		mu        sync.Mutex
+		wg        sync.WaitGroup
 	)
 
-	appendLine := func(line string) {
-		mu.Lock()
-		buf.WriteString(line)
-		buf.WriteByte('\n')
-		mu.Unlock()
-	}
-
-	scan := func(r io.Reader, wg *sync.WaitGroup) {
+	scan := func(kind StreamType, r io.Reader, dst *bytes.Buffer) {
 		defer wg.Done()
 		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for scanner.Scan() {
-			appendLine(scanner.Text())
+			line := scanner.Text()
+			mu.Lock()
+			dst.WriteString(line)
+			dst.WriteByte('\n')
+			mu.Unlock()
+			if onLine != nil {
+				onLine(kind, line)
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			mu.Lock()
-			errs = append(errs, err)
+			scanErrs = append(scanErrs, err)
 			mu.Unlock()
 		}
 	}
 
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start: %w", err)
-	}
-
-	var wg sync.WaitGroup
 	wg.Add(2)
-	go scan(stdout, &wg)
-	go scan(stderr, &wg)
+	go scan(StreamStdout, stdout, &stdoutBuf)
+	go scan(StreamStderr, stderr, &stderrBuf)
 
 	waitErr := cmd.Wait()
 	wg.Wait()
 
 	mu.Lock()
-	output := buf.String()
-	scanErrs := errs
+	result := CommandResult{
+		Command:  command,
+		Args:     append([]string(nil), args...),
+		Code:     exitCode(waitErr),
+		Stdout:   stdoutBuf.String(),
+		Stderr:   stderrBuf.String(),
+		Duration: time.Since(start),
+	}
+	errs := append([]error(nil), scanErrs...)
 	mu.Unlock()
 
 	if waitErr != nil {
 		if ctx.Err() != nil {
-			return output, fmt.Errorf("已取消")
+			return result, fmt.Errorf("command canceled: %w", ctx.Err())
 		}
-		return output, fmt.Errorf("%s: %w\n%s", name, waitErr, strings.TrimSpace(output))
+		return result, fmt.Errorf("%s exited with code %d", command, result.Code)
 	}
-	if len(scanErrs) > 0 {
-		return output, fmt.Errorf("读取输出失败: %w", scanErrs[0])
+	if len(errs) > 0 {
+		return result, fmt.Errorf("read command output: %w", errs[0])
 	}
-	return output, nil
+	return result, nil
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }

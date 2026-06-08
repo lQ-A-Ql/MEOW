@@ -3,6 +3,7 @@ package symbolsources
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,43 @@ func TestLoad_DefaultWhenMissing(t *testing.T) {
 	}
 	if len(sources) != 1 || sources[0].Name != DefaultName {
 		t.Fatalf("sources: %#v", sources)
+	}
+}
+
+func TestFindRejectsOversizedIndex(t *testing.T) {
+	const banner = "Linux version 5.4.0-test"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", MaxIndexBytes+1)))
+	}))
+	defer server.Close()
+
+	sources := []Source{{
+		Name:       "large",
+		IndexURL:   server.URL,
+		RawBaseURL: server.URL + "/raw/",
+	}}
+	match, warnings, err := Find(context.Background(), server.Client(), sources, banner)
+	if err != nil {
+		t.Fatalf("Find should return warnings, not fatal error: %v", err)
+	}
+	if match != nil {
+		t.Fatalf("expected no match, got %#v", match)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "too large") {
+		t.Fatalf("expected too large warning, got %#v", warnings)
+	}
+}
+
+func TestReadLimitedRejectsOversizedContent(t *testing.T) {
+	_, err := readLimited(strings.NewReader("abcdef"), 3, "fixture", "test://fixture")
+	if err == nil {
+		t.Fatal("expected limit error")
+	}
+	if !strings.Contains(err.Error(), "fixture too large") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected wrapped context error: %v", err)
 	}
 }
 

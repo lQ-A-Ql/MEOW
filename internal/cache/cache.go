@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const SentinelFileName = ".meow-cache"
+
 type DownloadMeta struct {
 	URL          string `json:"url"`
 	Filename     string `json:"filename"`
@@ -44,6 +46,9 @@ func EnsureLayout(root string) error {
 			return err
 		}
 	}
+	if err := os.WriteFile(SentinelPath(root), []byte("meow cache\n"), 0o644); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -65,6 +70,10 @@ func SymbolsDir(root string) string {
 
 func MetadataDir(root string) string {
 	return filepath.Join(root, "metadata")
+}
+
+func SentinelPath(root string) string {
+	return filepath.Join(root, SentinelFileName)
 }
 
 func CacheKey(rawURL string) string {
@@ -147,9 +156,9 @@ func ListDownloadMeta(root string) ([]DownloadMeta, error) {
 	return metas, nil
 }
 
-func Clear(root string) error {
-	if root == "" || root == "." || filepath.Clean(root) == string(filepath.Separator) {
-		return fmt.Errorf("refuse to clear unsafe cache dir: %q", root)
+func Clear(root string, force bool) error {
+	if err := validateClearRoot(root, force); err != nil {
+		return err
 	}
 	if err := os.RemoveAll(root); err != nil {
 		return err
@@ -172,4 +181,60 @@ func NewDownloadMeta(rawURL, filePath, sha string, size int64, cacheHit bool) Do
 func sanitizeFilename(name string) string {
 	replacer := strings.NewReplacer("\\", "_", "/", "_", ":", "_", "*", "_", "?", "_", "\"", "_", "<", "_", ">", "_", "|", "_")
 	return replacer.Replace(name)
+}
+
+func validateClearRoot(root string, force bool) error {
+	if strings.TrimSpace(root) == "" {
+		return fmt.Errorf("refuse to clear unsafe cache dir: %q", root)
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	clean := filepath.Clean(abs)
+	if clean == "." || clean == string(filepath.Separator) {
+		return fmt.Errorf("refuse to clear unsafe cache dir: %q", root)
+	}
+	volume := filepath.VolumeName(clean)
+	if volume != "" && clean == volume+string(filepath.Separator) {
+		return fmt.Errorf("refuse to clear unsafe cache dir: %q", root)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		homeAbs, err := filepath.Abs(home)
+		if err == nil && samePath(clean, filepath.Clean(homeAbs)) {
+			return fmt.Errorf("refuse to clear home directory as cache dir: %s", clean)
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		cwdAbs, err := filepath.Abs(cwd)
+		if err == nil && pathContains(clean, filepath.Clean(cwdAbs)) {
+			return fmt.Errorf("refuse to clear current working directory or ancestor as cache dir: %s", clean)
+		}
+	}
+	defaultAbs, err := filepath.Abs(DefaultDir())
+	isDefault := err == nil && samePath(clean, filepath.Clean(defaultAbs))
+	if !isDefault && !force {
+		if _, err := os.Stat(SentinelPath(clean)); err != nil {
+			return fmt.Errorf("refuse to clear custom cache dir without %s sentinel: %s", SentinelFileName, clean)
+		}
+	}
+	return nil
+}
+
+func samePath(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func pathContains(parent, child string) bool {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
+	if samePath(parent, child) {
+		return true
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	rel = filepath.Clean(rel)
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }

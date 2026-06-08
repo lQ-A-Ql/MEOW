@@ -112,6 +112,7 @@ func (n Native) runBuild(ctx context.Context, req BuildRequest, extra map[string
 	for key, value := range extra {
 		b.WriteString(key + "=" + ShellQuote(value) + "\n")
 	}
+	b.WriteString(safeArchiveShellFunction())
 	b.WriteString(body)
 
 	var result *runner.Result
@@ -147,6 +148,83 @@ func (n Native) runBuild(ctx context.Context, req BuildRequest, extra map[string
 		VmlinuxPath: parseMarker(result.Output, "VOLSYM_VMLINUX="),
 		Output:      result.Output,
 	}, nil
+}
+
+func archiveEntryIsSafe(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	if strings.ContainsAny(name, "\x00\r\n") {
+		return false
+	}
+	if strings.Contains(name, "\\") {
+		return false
+	}
+	normalized := name
+	if strings.HasPrefix(normalized, "/") {
+		return false
+	}
+	if len(normalized) >= 2 && normalized[1] == ':' {
+		return false
+	}
+	for _, part := range strings.Split(normalized, "/") {
+		if part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func safeArchiveShellFunction() string {
+	return `
+is_safe_archive_entry() {
+  entry="$1"
+  [ -n "$entry" ] || return 1
+  case "$entry" in
+    /*|*"/../"*|../*|*".."|*\\..\\*|..\\*|*[$'\r\n']*) return 1 ;;
+  esac
+  case "$entry" in
+    [A-Za-z]:*|*\\*) return 1 ;;
+  esac
+  return 0
+}
+
+validate_archive_entries() {
+  list_file="$1"
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    if ! is_safe_archive_entry "$entry"; then
+      echo "[ERROR] unsafe archive entry: $entry" >&2
+      exit 31
+    fi
+  done < "$list_file"
+}
+
+validate_archive_entry_types() {
+  list_file="$1"
+  while IFS= read -r detail; do
+    [ -n "$detail" ] || continue
+    entry_type="${detail:0:1}"
+    case "$entry_type" in
+      -|d) ;;
+      *) echo "[ERROR] unsafe archive entry type: $detail" >&2; exit 35 ;;
+    esac
+    case "$detail" in
+      *" -> "*) echo "[ERROR] unsafe archive link entry: $detail" >&2; exit 36 ;;
+    esac
+  done < "$list_file"
+}
+
+ensure_path_under() {
+  child="$(realpath "$1")"
+  parent="$(realpath "$2")"
+  case "$child" in
+    "$parent"|"$parent"/*) return 0 ;;
+    *) echo "[ERROR] path escaped work dir: $child" >&2; exit 32 ;;
+  esac
+}
+`
 }
 
 func (n Native) Bash(ctx context.Context, script string) (*runner.Result, error) {
@@ -193,6 +271,14 @@ func Doctor(ctx context.Context) []Check {
 			continue
 		}
 		checks = append(checks, Check{Name: dep, OK: true, Detail: path})
+	}
+	depCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	path, err := lookPathWithContext(depCtx, "vol")
+	cancel()
+	if err != nil {
+		checks = append(checks, Check{Name: "vol", OK: false, Detail: err.Error(), Warning: true})
+	} else {
+		checks = append(checks, Check{Name: "vol", OK: true, Detail: path})
 	}
 	return checks
 }

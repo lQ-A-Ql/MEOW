@@ -6,10 +6,10 @@ meow 是一个 Linux 内核 Volatility 3 符号表生成工具，由两个独立
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     TUI 前端 (Bun + TypeScript + OpenTUI)   │
+│                 Go TUI (cmd/tui.go + internal/tui)          │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
-│  │ 命令解析  │  │ 状态管理  │  │ 日志渲染  │  │ 子进程执行  │  │
-│  │commands.ts│  │ state.ts │  │  app.ts  │  │ runner/*.ts│  │
+│  │ slash 命令 │  │ 状态模型  │  │ 三栏渲染  │  │ Runner argv │  │
+│  │commands.go│  │ app.go   │  │ app.go   │  │ runner.go   │  │
 │  └──────────┘  └──────────┘  └──────────┘  └─────┬──────┘  │
 │                                                   │         │
 └───────────────────────────────────────────────────┼─────────┘
@@ -56,11 +56,11 @@ meow 是一个 Linux 内核 Volatility 3 符号表生成工具，由两个独立
 | Volatility 封装 | `internal/volatility/` | 调用 `vol` CLI 提取 banner、验证符号 |
 | 符号文件命名 | `internal/symbols/` | `FileName()` 统一输出文件名格式 |
 | Logo | `internal/logo/` | ASCII art 渐变 logo |
-| TUI 入口 | `tui/src/index.ts` | 启动 OpenTUI 应用 |
-| TUI 应用 | `tui/src/app.ts` | 渲染器、键盘、生命周期、三面板布局 |
-| TUI 命令 | `tui/src/commands.ts` | `/` 前缀命令解析与分发 |
-| TUI 状态 | `tui/src/state.ts` | 不可变状态管理 |
-| TUI 运行器 | `tui/src/runner/` | Bun.spawn 子进程执行 meow/vol |
+| TUI 入口 | `cmd/tui.go` | 注册 `meow tui` flags，合并 config 默认值，启动 Bubble Tea |
+| TUI 应用 | `internal/tui/app.go` | Bubble Tea model、键盘、三栏/双栏/单栏响应式布局 |
+| TUI 命令 | `internal/tui/commands.go` | `/` 前缀命令解析、带引号参数、cache clear 确认保护 |
+| TUI 运行器 | `internal/tui/runner.go` | argv 子进程执行，stdout/stderr 流式回调，取消/退出码处理 |
+| TUI 工作流 | `internal/tui/workflow.go` | doctor → preflight → build → verify、cache、plugin run |
 
 ---
 
@@ -206,124 +206,57 @@ vmlinux 搜索路径（按优先级）：
 
 ### 3.1 技术栈
 
-- **运行时**: Bun 1.3.x
-- **UI 框架**: @opentui/core 0.3.x
-- **语言**: TypeScript (strict mode)
-- **测试**: bun:test
+- **运行时**: Go CLI 内置子命令 `meow tui`
+- **UI 框架**: Bubble Tea + Bubbles textinput + Lip Gloss
+- **测试**: Go 单元测试和 stub runner 集成测试
 
 ### 3.2 UI 布局
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Logo Panel                            │
-│               MEOW~~ ASCII art + 版本号                   │
-├────────────┬────────────────────────┬───────────────────┤
-│            │                        │                   │
-│  Left 22%  │    Center (flexGrow)   │   Right 34 cols   │
-│            │                        │                   │
-│ 镜像信息    │   日志输出 (ScrollBox)   │   插件列表         │
-│ 符号表路径  │   底部粘性滚动           │   /plugin 切换     │
-│ 输出目录    │                        │                   │
-│ 当前插件    │                        │                   │
-│ Banner 信息│                        │                   │
-│ 运行状态    │                        │                   │
-│            │                        │                   │
-├────────────┴────────────────────────┴───────────────────┤
-│  > 命令输入框                              i 聚焦|r 执行 │
-└─────────────────────────────────────────────────────────┘
+>=100 cols:  [Input/Environment] [Workflow/Logs] [Plugin/Results]
+70-99 cols: [Input/Environment] [Workflow/Logs]
+<70 cols:   [Workflow/Logs]
+
+Bottom: command bar, i focus input, r run, x cancel, q quit
 ```
+
+TUI 使用压缩标题，状态符统一为 ASCII：`[OK]`、`[ERR]`、`[WARN]`、`[RUN]`，降低终端宽度差异导致的错位风险。
 
 ### 3.3 状态管理
 
-`AppState` 是唯一的全局状态，所有变更通过纯函数返回新对象：
-
-```typescript
-type AppState = {
-  // 路径配置
-  meowPath, volPath, memPath, symbolsPath, bannerFile, outDir, cacheDir, plugin
-  // 运行时
-  imageInfo: ImageInfo | null
-  logs: LogEntry[]
-  nextLogId: number
-  runningTask?: RunningTask
-  // 输入
-  commandInput: string
-  inputFocused: boolean
-  // 最近结果
-  lastParseResult?, lastBuildResult?, lastVolOutput?,
-  lastDoctorResult?, lastVerifyResult?, lastCacheResult?
-}
-```
-
-状态变更函数（`state.ts`）：
-- `appendLog(state, level, message)` — 追加日志，上限 200 条
-- `appendChunkLog(state, level, chunk)` — 按换行拆分追加
-- `setRunningTask(state, task)` / `clearRunningTask(state)`
-- `setCommandInput`, `setInputFocused`, `setImageInfo`
+`internal/tui.Model` 是唯一运行状态，包含路径配置、input mode、running action、cancel function、日志和最近结果。最近结果只保存 CLI JSON 的最小字段：`DoctorCheck`、`BuildSummary`、`VerifySummary`、`CacheEntry`。
 
 ### 3.4 命令系统
 
-用户输入以 `/` 开头触发命令解析（`commands.ts`）：
+用户输入以 `/` 开头，参数解析支持单/双引号路径，未闭合引号直接报错。核心命令：
 
 ```
-/mem <path>       设置内存镜像路径
-/symbol <path>    设置符号表路径
-/plugin <name>    设置当前 Volatility 插件
-
-/run              执行当前插件 (vol -f mem -s symbols plugin)
-/banner           提取内核 banner (vol -f mem banners.Banners)
-/build            运行 meow build --dry-run
-/verify           验证符号表 (meow verify)
-
-/clear            清空日志
-/help             显示帮助
+/mem <path> | /banner-file <path> | /debug-package <path>
+/debug-package-url <url> | /repo-url <url> | /vmlinux <path>
+/manual --distro <name> --kernel <release> --pkgver <version> [--arch <arch>]
+/symbol <path> | /out <dir> | /cache-dir <dir> | /symbol-sources <path>
+/vol <path> | /meow <path> | /plugin <name> | /plugin-args [args...]
+/remote on|off | /force on|off
+/doctor | /preflight | /build | /verify | /run | /workflow
+/cache list | /cache clear --confirm [--force]
+/clear | /help
 ```
 
-非 `/` 开头的输入视为未知命令。
+`/cache clear` 必须显式带 `--confirm`，需要强制清理时再加 `--force`。
 
-### 3.5 Runner 层
+### 3.5 Runner 与工作流
 
-```
-runner/process.ts    通用 Bun.spawn 封装
-  ├─ argv 数组，不使用 shell 字符串（防注入）
-  ├─ TextDecoder { stream: true } 流式解码
-  ├─ AbortSignal 取消支持
-  └─ stdout/stderr 分流回调
+Runner 只通过 argv 数组执行外部命令，不拼 shell 字符串。stdout/stderr 会实时追加到 TUI 日志，命令完成后返回 `CommandResult{Code, Stdout, Stderr, Duration}`。
 
-runner/meow.ts       meow CLI 封装
-  ├─ buildMeowJSONArgs()    自动加 --json
-  ├─ runMeowJSON()          解析 JSON 输出
-  ├─ runDoctor / runParseBannerFile / runBuildDryRun / runVerify / runCacheList
-  └─ MeowCommandError       错误类 (args + result + parsed)
+工作流：
 
-runner/vol.ts        Volatility 3 封装
-  ├─ buildVolArgs()          构建 -f mem [-s symbols] plugin 参数
-  ├─ runVolPlugin()          通用执行
-  └─ extractBanner / runPsList    便捷函数
-```
+1. `doctor`: `meow --json doctor`
+2. `preflight`: `meow --json build --dry-run ...`
+3. `build`: `meow --json build ...`
+4. `verify`: `meow --json verify --mem ... --symbols ... --vol ...`，无 mem 时跳过并记录 warning
+5. `run`: `vol -f mem -s symbols plugin pluginArgs...`
 
-### 3.6 生命周期
-
-```
-startApp()
-  ├─ createCliRenderer({ exitOnCtrlC: false, exitSignals: [SIGTERM, ...] })
-  ├─ try {
-  │    state = createInitialState()
-  │    render()           // 首次渲染
-  │    setupInput()       // 创建 Input 组件
-  │    keyInput.on(...)   // 注册键盘处理
-  │  } catch {
-  │    renderer.destroy() // 启动失败清理
-  │  }
-  │
-  ├─ shutdown() {
-  │    runningTask?.abort()  // 取消运行中任务
-  │    renderer.destroy()    // 释放终端
-  │    process.exit(0)
-  │  }
-  │
-  └─ 每次 setState → redraw() → renderer.root.remove/add 重建
-```
+build 成功后，如果 `symbol_path` 位于 `symbols/linux/*.json.xz`，TUI 自动把 `symbolsPath` 设置为其父级 `symbols`。
 
 ---
 
@@ -331,15 +264,15 @@ startApp()
 
 ### 4.1 TUI 不复制 Go 逻辑
 
-TUI 仅负责状态收集、子进程调用和结果渲染。所有符号生成逻辑保留在 Go CLI 中，TUI 通过 `Bun.spawn([meowPath, ...args])` 调用。这避免了逻辑重复和维护负担。
+TUI 仅负责状态收集、子进程调用和结果渲染。所有符号生成逻辑保留在 Go CLI 中，TUI 通过 Go `exec.CommandContext(command, args...)` 调用 `meow` 和 `vol`，避免逻辑重复和维护负担。
 
 ### 4.2 argv 数组而非 shell 字符串
 
-TUI 的 `runCommand()` 始终使用 `Bun.spawn([cmd, ...args])` 而非 `Bun.spawn(["sh", "-c", cmdStr])`。这消除了 shell 注入风险，且路径中的空格/特殊字符不会被误解析。
+TUI Runner 始终使用 argv 数组执行外部命令，禁止把用户输入拼接为 shell 命令字符串。这消除了 shell 注入风险，且路径中的空格不会被误解析。
 
-### 4.3 不可变状态
+### 4.3 Go TUI 主线
 
-`AppState` 的所有变更都返回新对象（spread operator）。这使得 OpenTUI 的 diff/重绘机制能正确工作，也使状态历史可追溯。
+`meow tui` 是唯一正式 TUI 入口。历史 Bun/OpenTUI 子项目已删除，避免 CLI 入口、文档与 CI 门禁分裂。
 
 ### 4.4 提取错误处理（临时文件模式）
 
@@ -361,6 +294,5 @@ bash 脚本中 `cmd | while read` 管道的问题：`while` 循环的退出码�
 |----|------|----------|
 | Go 单元测试 | `go test ./...` | banner 解析、resolver 候选/probe、cache 元数据、backend marker 解析、ShellQuote、命令 flag |
 | Go 冒烟测试 | CI smoke | parse dry-run、build dry-run (Ubuntu + RPM) |
-| TUI 单元测试 | `bun test` | meow/vol 参数构建 |
-| TUI 类型检查 | `tsc --noEmit` | 全量 TypeScript 类型安全 |
-| CI 门禁 | GitHub Actions | backend job: lint + test + build + smoke; frontend job: install + tsc + test |
+| Go TUI 单元测试 | `go test ./internal/tui ./cmd` | options、命令解析、argv 参数构建、runner、workflow、view |
+| CI 门禁 | GitHub Actions | docs gate + backend job: lint、unit、coverage、race、build、smoke |

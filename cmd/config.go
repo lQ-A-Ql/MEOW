@@ -21,6 +21,29 @@ type configFile struct {
 	MaxRetries             int    `json:"max_retries"`
 }
 
+func applyConfigDefaults(cfg configFile) configFile {
+	defaults := defaultConfig()
+	if cfg.CacheDir == "" {
+		cfg.CacheDir = defaults.CacheDir
+	}
+	if cfg.OutputDir == "" {
+		cfg.OutputDir = defaults.OutputDir
+	}
+	if cfg.SymbolSourcesPath == "" {
+		cfg.SymbolSourcesPath = defaults.SymbolSourcesPath
+	}
+	if cfg.VolatilityPath == "" {
+		cfg.VolatilityPath = defaults.VolatilityPath
+	}
+	if cfg.DownloadTimeoutSeconds <= 0 {
+		cfg.DownloadTimeoutSeconds = defaults.DownloadTimeoutSeconds
+	}
+	if cfg.MaxRetries <= 0 {
+		cfg.MaxRetries = defaults.MaxRetries
+	}
+	return cfg
+}
+
 var configJSON bool
 
 func init() {
@@ -125,10 +148,7 @@ func readOrDefaultConfig() (configFile, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return configFile{}, err
 	}
-	if cfg.SymbolSourcesPath == "" {
-		cfg.SymbolSourcesPath = sourcespkg.DefaultPath()
-	}
-	return cfg, nil
+	return applyConfigDefaults(cfg), nil
 }
 
 func failConfig(jsonMode bool, err error) {

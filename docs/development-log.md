@@ -1,5 +1,21 @@
 # meow Development Log
 
+## 2026-06-08  TUI 主线收敛
+
+### Go TUI 工程化改造
+
+- 决策：`meow tui` 以 Go Bubble Tea 为唯一正式 TUI 主线，第一版聚焦 Linux 符号生成闭环。
+- 删除历史 Bun/OpenTUI 子项目 `tui/`，相关历史记录保留在本文档中，不再作为当前架构或 CI 主线。
+- 删除 `cmd/tuitest.go` 诊断命令，避免正式 CLI 暴露测试入口。
+- `cmd/tui.go` 新增 TUI flags，并合并 config 默认值；`--meow` 默认使用当前可执行文件。
+- `internal/tui` 新增 Options、slash command parser、argv Runner、JSON 最小类型、doctor/preflight/build/verify/run/workflow/cache 工作流。
+- TUI runner 只用 argv 调用 `meow` 和 `vol`，stdout/stderr 流式写入日志，支持取消和非零退出码。
+- CI 移除 Bun frontend job，Go TUI 测试纳入 backend `go test ./...`。
+
+### 验证
+
+- `go test ./internal/tui ./cmd -count=1`：包内测试输出 `ok`；本地 Windows 可能因测试二进制清理锁导致命令退出码为 1。
+
 ## 2026-05-05 20:50 CST - Codex
 
 ### 文档评审

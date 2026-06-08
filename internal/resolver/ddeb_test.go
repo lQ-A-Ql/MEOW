@@ -110,6 +110,60 @@ func TestResolveRpmRepo_PrimaryGzipFound(t *testing.T) {
 	}
 }
 
+func TestResolveRpmRepo_PrimaryDBUnsupported(t *testing.T) {
+	info := &banner.KernelInfo{
+		Distro:        "rocky",
+		KernelRelease: "4.18.0-513.5.1.el8_9.x86_64",
+		Arch:          "amd64",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repodata/repomd.xml" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`<repomd><data type="primary_db"><location href="repodata/primary.sqlite.bz2"/></data></repomd>`))
+	}))
+	defer server.Close()
+
+	_, err := ResolveRpmRepo(context.Background(), info, server.URL, server.Client())
+	if err == nil {
+		t.Fatal("expected primary_db unsupported error")
+	}
+	if !strings.Contains(err.Error(), "primary_db metadata is unsupported") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveRpmRepo_RepomdTooLarge(t *testing.T) {
+	info := &banner.KernelInfo{
+		Distro:        "rocky",
+		KernelRelease: "4.18.0-513.5.1.el8_9.x86_64",
+		Arch:          "amd64",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", maxRepomdBytes+1)))
+	}))
+	defer server.Close()
+
+	_, err := ResolveRpmRepo(context.Background(), info, server.URL, server.Client())
+	if err == nil {
+		t.Fatal("expected repomd size error")
+	}
+	if !strings.Contains(err.Error(), "repomd.xml too large") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePrimaryPackagesRejectsOversizedContent(t *testing.T) {
+	_, err := parsePrimaryPackages(strings.NewReader(strings.Repeat("x", 128)), 8)
+	if err == nil {
+		t.Fatal("expected primary metadata size error")
+	}
+	if !strings.Contains(err.Error(), "primary metadata too large") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestGenerateCandidates_Debian(t *testing.T) {
 	info := &banner.KernelInfo{
 		Distro:         "debian",
