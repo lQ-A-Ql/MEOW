@@ -97,3 +97,21 @@ flowchart LR
 - 代码可维护性：10 分。
 
 硬性封顶：CI 不绿最高 50 分；高风险未关闭最高 70 分；未更新 `design.md/tasks.md` 最高 80 分；JSON mode 被污染最高 75 分。
+
+## 9. TUI Command Product Rules
+
+- `meow tui` is the only supported TUI entrypoint.
+- The active build source is explicit state. `/mode` and `/source` select `mem`, `banner-file`, `debug-package`, `debug-package-url`, `repo-url`, `vmlinux`, or `manual`.
+- Source-setting commands also switch the active source. Example: `/mem dump.raw` selects `mem`; `/debug-package kernel.rpm` selects `debug-package`.
+- Manual override fields are source-agnostic: `/distro`, `/kernel`, `/pkgver`, and `/arch` may refine any build source and are passed through to `meow --json build`.
+- The TUI must provide state recovery commands: `/unset <field>`, `/reset inputs`, and `/reset all`.
+- Destructive cache operations remain protected by `/cache clear --confirm`; `--force` still requires `--confirm`.
+- CLI startup presets must match the slash command model: `--source`, `--plugin`, and repeated `--plugin-arg` are supported without shell string expansion.
+
+## 10. TUI Layout Product Rules
+
+- Short and narrow terminals are log-first. `height <= 18` or `width < 40` uses a borderless compact view with status, logs, and command input only.
+- Near-short terminals (`19 <= height < 22`) hide side panels and keep the workflow/log panel visible.
+- The gradient `MEOW` brand mark remains visible when width allows it; very narrow terminals may truncate it instead of wrapping.
+- Rendered log lines must be clipped to the available width before styling so terminal wrapping cannot create vertical overflow.
+- Log history must remain navigable with `up/down`, `k/j`, `pgup/pgdown`, `home/end`.

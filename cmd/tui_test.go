@@ -74,3 +74,35 @@ func TestApplyTUIConfigDefaultsRespectsExplicitFlags(t *testing.T) {
 		t.Fatalf("explicit flags not respected: %#v", got)
 	}
 }
+
+func TestTUIFlagsSupportSourceAndPluginPreset(t *testing.T) {
+	fs := flag.NewFlagSet("tui-test", flag.ContinueOnError)
+	var opts tuipkg.Options
+	var pluginArgs stringListFlag
+	fs.Var(sourceModeFlag{target: &opts.SourceMode}, "source", "")
+	fs.StringVar(&opts.Plugin, "plugin", "", "")
+	fs.Var(&pluginArgs, "plugin-arg", "")
+	if err := fs.Parse([]string{"--source", "mem", "--plugin", "linux.pslist.PsList", "--plugin-arg", "--pid", "--plugin-arg", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	opts.PluginArgs = append([]string(nil), pluginArgs...)
+
+	if opts.SourceMode != tuipkg.InputModeMem {
+		t.Fatalf("source mode: %q", opts.SourceMode)
+	}
+	if opts.Plugin != "linux.pslist.PsList" {
+		t.Fatalf("plugin: %q", opts.Plugin)
+	}
+	if len(opts.PluginArgs) != 2 || opts.PluginArgs[0] != "--pid" || opts.PluginArgs[1] != "1" {
+		t.Fatalf("plugin args: %#v", opts.PluginArgs)
+	}
+}
+
+func TestTUISourceFlagRejectsUnknownMode(t *testing.T) {
+	fs := flag.NewFlagSet("tui-test", flag.ContinueOnError)
+	var opts tuipkg.Options
+	fs.Var(sourceModeFlag{target: &opts.SourceMode}, "source", "")
+	if err := fs.Parse([]string{"--source", "unknown"}); err == nil {
+		t.Fatal("expected unknown source mode error")
+	}
+}

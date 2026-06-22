@@ -20,6 +20,7 @@ const (
 type Options struct {
 	MeowPath          string
 	VolPath           string
+	SourceMode        InputMode
 	MemPath           string
 	SymbolsPath       string
 	OutDir            string
@@ -63,10 +64,20 @@ func (o Options) WithDefaults() Options {
 	if o.Runner == nil {
 		o.Runner = ExecRunner{}
 	}
+	if !validInputMode(o.SourceMode) {
+		o.SourceMode = o.detectInputMode()
+	}
 	return o
 }
 
 func (o Options) InputMode() InputMode {
+	if validInputMode(o.SourceMode) {
+		return o.SourceMode
+	}
+	return o.detectInputMode()
+}
+
+func (o Options) detectInputMode() InputMode {
 	switch {
 	case strings.TrimSpace(o.DebugPackage) != "":
 		return InputModeDebugPackage
@@ -84,6 +95,36 @@ func (o Options) InputMode() InputMode {
 		return InputModeMem
 	default:
 		return InputModeManual
+	}
+}
+
+func validInputMode(mode InputMode) bool {
+	switch mode {
+	case InputModeMem, InputModeBannerFile, InputModeDebugPackage, InputModeDebugPackageURL, InputModeRepoURL, InputModeVMLINUX, InputModeManual:
+		return true
+	default:
+		return false
+	}
+}
+
+func ParseInputMode(value string) (InputMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "mem", "memory":
+		return InputModeMem, true
+	case "banner", "banner-file":
+		return InputModeBannerFile, true
+	case "debug-package", "debug-pkg", "package":
+		return InputModeDebugPackage, true
+	case "debug-package-url", "debug-url", "package-url":
+		return InputModeDebugPackageURL, true
+	case "repo", "repo-url":
+		return InputModeRepoURL, true
+	case "vmlinux":
+		return InputModeVMLINUX, true
+	case "manual":
+		return InputModeManual, true
+	default:
+		return "", false
 	}
 }
 

@@ -80,3 +80,15 @@
 | Stage 4 | 90 | CI 增加 docs、coverage baseline、race gates |
 | Stage 5 | 92 | 复审 P1/P2 已闭环，新增针对性回归测试 |
 | Stage 6 | 90 | Go TUI 主线收敛，OpenTUI 已移除，符号生成工作流和回归测试已补齐 |
+
+## Stage 6 TUI Command Surface Addendum
+
+| ID | Stage | Task | Status | Evidence |
+|---|---|---|---|---|
+| T6-7 | 6 | Productize TUI command surface with explicit `/mode`/`/source`, `/unset`, `/reset`, aliases, and plugin startup presets | Done | `go test ./internal/tui ./cmd -run "Test(TUI|ApplyTUI|ModeUnset|ExplicitMode|ValidateBuildInput)" -count=1` |
+| T6-8 | 6 | Harden short-height and narrow-width TUI rendering with compact log-first layout, clipped log lines, and scroll regression tests | Done | `go test ./internal/tui -run "TestView|TestLogScroll" -count=1 -v` |
+
+### 2026-06-09 Validation Note
+
+- Focused TUI/cmd tests passed at package level; local Windows may still report Go test binary cleanup locks after `ok`.
+- Short panel regression tests now cover 4/8/12/13/18 row terminals, 8/20/39/60 column edge cases, long-line clipping, and log history scrolling.

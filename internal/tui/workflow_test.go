@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type runnerCall struct {
@@ -111,6 +112,111 @@ func TestViewResponsiveWidths(t *testing.T) {
 				t.Fatalf("view missing expected content at width %d:\n%s", width, view)
 			}
 		})
+	}
+}
+
+func TestViewFitsShortWindows(t *testing.T) {
+	for _, height := range []int{4, 8, 12, 13, 18} {
+		t.Run(fmt.Sprint(height), func(t *testing.T) {
+			m := NewModelWithOptions(Options{MemPath: "mem.raw"})
+			for i := 0; i < 20; i++ {
+				m.logs.Append(LogInfo, fmt.Sprintf("line-%02d", i))
+			}
+			model, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: height})
+			view := model.(Model).View()
+			lines := strings.Split(view, "\n")
+			if len(lines) > height {
+				t.Fatalf("view height overflow: got %d lines want <= %d\n%s", len(lines), height, view)
+			}
+			if lipgloss.Height(view) > height {
+				t.Fatalf("visual height overflow: got %d want <= %d\n%s", lipgloss.Height(view), height, view)
+			}
+			if strings.Contains(view, "╭") || strings.Contains(view, "╰") {
+				t.Fatalf("compact short view should not spend rows on panel borders:\n%s", view)
+			}
+			assertViewWidth(t, view, 80)
+			if height >= 4 && !strings.Contains(view, "line-19") {
+				t.Fatalf("compact short view should preserve latest log visibility:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestViewFitsNarrowShortWindows(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 3, Height: 4},
+		{Width: 4, Height: 4},
+		{Width: 8, Height: 5},
+		{Width: 20, Height: 14},
+		{Width: 39, Height: 24},
+		{Width: 60, Height: 19},
+	} {
+		t.Run(fmt.Sprintf("%dx%d", size.Width, size.Height), func(t *testing.T) {
+			m := NewModelWithOptions(Options{MemPath: "mem.raw"})
+			for i := 0; i < 30; i++ {
+				m.logs.Append(LogInfo, fmt.Sprintf("line-%02d %s", i, strings.Repeat("x", 120)))
+			}
+			model, _ := m.Update(size)
+			view := model.(Model).View()
+			if lipgloss.Height(view) > size.Height {
+				t.Fatalf("view height overflow: got %d want <= %d\n%s", lipgloss.Height(view), size.Height, view)
+			}
+			assertViewWidth(t, view, size.Width)
+			if size.Height <= compactHeightLimit || size.Width < compactWidthLimit {
+				if strings.Contains(view, "╭") || strings.Contains(view, "╰") {
+					t.Fatalf("compact view should not render panel borders:\n%s", view)
+				}
+			}
+		})
+	}
+}
+
+func TestViewClipsLongLogLines(t *testing.T) {
+	m := NewModelWithOptions(Options{})
+	m.logs.Append(LogInfo, strings.Repeat("x", 400))
+	model, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 8})
+	view := model.(Model).View()
+	if lipgloss.Height(view) > 8 {
+		t.Fatalf("long log should not wrap past window height: %d\n%s", lipgloss.Height(view), view)
+	}
+	if !strings.Contains(view, "...") {
+		t.Fatalf("expected clipped log marker:\n%s", view)
+	}
+}
+
+func TestLogScrollShowsOlderLines(t *testing.T) {
+	m := NewModelWithOptions(Options{})
+	for i := 0; i < 30; i++ {
+		m.logs.Append(LogInfo, fmt.Sprintf("line-%02d", i))
+	}
+	model, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = model.(Model)
+
+	bottom := m.View()
+	if !strings.Contains(bottom, "line-29") {
+		t.Fatalf("expected bottom view to show latest log:\n%s", bottom)
+	}
+
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = model.(Model)
+	scrolled := m.View()
+	if !strings.Contains(scrolled, "scroll +") || strings.Contains(scrolled, "line-29") {
+		t.Fatalf("expected scrolled view to show older logs:\n%s", scrolled)
+	}
+
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = model.(Model)
+	if m.logScroll != 0 {
+		t.Fatalf("end should reset log scroll, got %d", m.logScroll)
+	}
+}
+
+func assertViewWidth(t *testing.T, view string, width int) {
+	t.Helper()
+	for idx, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("line %d width overflow: got %d want <= %d\n%s", idx+1, got, width, view)
+		}
 	}
 }
 

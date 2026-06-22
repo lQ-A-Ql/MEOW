@@ -53,11 +53,12 @@ func (ExecRunner) Run(ctx context.Context, command string, args []string, onLine
 	}
 
 	var (
-		stdoutBuf bytes.Buffer
-		stderrBuf bytes.Buffer
-		scanErrs  []error
-		mu        sync.Mutex
-		wg        sync.WaitGroup
+		stdoutBuf  bytes.Buffer
+		stderrBuf  bytes.Buffer
+		scanErrs   []error
+		mu         sync.Mutex
+		callbackMu sync.Mutex
+		wg         sync.WaitGroup
 	)
 
 	scan := func(kind StreamType, r io.Reader, dst *bytes.Buffer) {
@@ -71,7 +72,9 @@ func (ExecRunner) Run(ctx context.Context, command string, args []string, onLine
 			dst.WriteByte('\n')
 			mu.Unlock()
 			if onLine != nil {
+				callbackMu.Lock()
 				onLine(kind, line)
+				callbackMu.Unlock()
 			}
 		}
 		if err := scanner.Err(); err != nil {

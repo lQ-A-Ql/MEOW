@@ -78,6 +78,9 @@ func (m Model) runDoctor(ctx context.Context, onLine StreamCallback) workflowRes
 }
 
 func (m Model) runBuild(ctx context.Context, dryRun bool, onLine StreamCallback) workflowResult {
+	if err := m.validateBuildInput(); err != nil {
+		return workflowResult{model: m, err: err}
+	}
 	args := m.buildArgs(dryRun)
 	result, err := m.runner.Run(ctx, m.meowPath, args, onLine)
 	var summary BuildSummary
@@ -183,12 +186,13 @@ func (m Model) buildArgs(dryRun bool) []string {
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
+	mode := m.inputMode()
 	add := func(flag, value string) {
 		if strings.TrimSpace(value) != "" {
 			args = append(args, flag, value)
 		}
 	}
-	switch m.inputMode() {
+	switch mode {
 	case InputModeMem:
 		add("--mem", m.memPath)
 	case InputModeBannerFile:
@@ -209,6 +213,11 @@ func (m Model) buildArgs(dryRun bool) []string {
 		add("--pkgver", m.packageVersion)
 		add("--distro", m.distro)
 	}
+	if mode != InputModeRepoURL && mode != InputModeManual {
+		add("--kernel", m.kernel)
+		add("--pkgver", m.packageVersion)
+		add("--distro", m.distro)
+	}
 	add("--arch", m.arch)
 	add("--out", m.outDir)
 	add("--cache-dir", m.cacheDir)
@@ -221,6 +230,64 @@ func (m Model) buildArgs(dryRun bool) []string {
 		args = append(args, "--force")
 	}
 	return args
+}
+
+func (m Model) validateBuildInput() error {
+	switch m.inputMode() {
+	case InputModeRepoURL:
+		missing := missingFields([]fieldValue{
+			{name: "repo-url", value: m.repoURL},
+			{name: "kernel", value: m.kernel},
+			{name: "pkgver", value: m.packageVersion},
+		})
+		if len(missing) > 0 {
+			return fmt.Errorf("missing repo-url input: /%s <value>", strings.Join(missing, " and /"))
+		}
+	case InputModeManual:
+		missing := missingFields([]fieldValue{
+			{name: "kernel", value: m.kernel},
+			{name: "pkgver", value: m.packageVersion},
+		})
+		if len(missing) > 0 {
+			return fmt.Errorf("missing manual input: /%s <value>", strings.Join(missing, " and /"))
+		}
+	case InputModeMem:
+		if strings.TrimSpace(m.memPath) == "" {
+			return fmt.Errorf("missing memory image: /mem <path>")
+		}
+	case InputModeBannerFile:
+		if strings.TrimSpace(m.bannerFile) == "" {
+			return fmt.Errorf("missing banner file: /banner-file <path>")
+		}
+	case InputModeDebugPackage:
+		if strings.TrimSpace(m.debugPackage) == "" {
+			return fmt.Errorf("missing debug package: /debug-package <path>")
+		}
+	case InputModeDebugPackageURL:
+		if strings.TrimSpace(m.debugPackageURL) == "" {
+			return fmt.Errorf("missing debug package URL: /debug-package-url <url>")
+		}
+	case InputModeVMLINUX:
+		if strings.TrimSpace(m.vmlinuxPath) == "" {
+			return fmt.Errorf("missing vmlinux: /vmlinux <path>")
+		}
+	}
+	return nil
+}
+
+type fieldValue struct {
+	name  string
+	value string
+}
+
+func missingFields(fields []fieldValue) []string {
+	missing := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if strings.TrimSpace(field.value) == "" {
+			missing = append(missing, field.name)
+		}
+	}
+	return missing
 }
 
 func decodeJSON(content string, target any) error {

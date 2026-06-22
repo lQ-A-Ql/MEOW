@@ -25,9 +25,16 @@ type actionDoneMsg struct {
 	result workflowResult
 }
 
+const (
+	compactHeightLimit = 18
+	compactWidthLimit  = 40
+	logOnlyBodyLimit   = 22
+)
+
 type Model struct {
 	meowPath          string
 	volPath           string
+	inputModeValue    InputMode
 	memPath           string
 	symbolsPath       string
 	outDir            string
@@ -51,6 +58,7 @@ type Model struct {
 	width, height int
 	input         textinput.Model
 	logs          *LogStore
+	logScroll     int
 	inputFocused  bool
 	running       bool
 	runningAction actionKind
@@ -80,6 +88,7 @@ func NewModelWithOptions(options Options) Model {
 	return Model{
 		meowPath:          options.MeowPath,
 		volPath:           options.VolPath,
+		inputModeValue:    options.InputMode(),
 		memPath:           options.MemPath,
 		symbolsPath:       options.SymbolsPath,
 		outDir:            options.OutDir,
@@ -113,7 +122,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.Width = max(20, msg.Width-12)
+		m.input.Width = max(4, msg.Width-18)
 		return m, nil
 	case tea.KeyMsg:
 		return m.onKey(msg)
@@ -191,6 +200,24 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logs.Append(LogWarn, "[WARN] canceling "+string(m.runningAction))
 		}
 		return m, nil
+	case "up", "k":
+		m.scrollLogs(1)
+		return m, nil
+	case "down", "j":
+		m.scrollLogs(-1)
+		return m, nil
+	case "pgup", "ctrl+b":
+		m.scrollLogs(max(1, m.logVisibleRows()))
+		return m, nil
+	case "pgdown", "ctrl+f":
+		m.scrollLogs(-max(1, m.logVisibleRows()))
+		return m, nil
+	case "home":
+		m.logScroll = m.maxLogScroll()
+		return m, nil
+	case "end":
+		m.logScroll = 0
+		return m, nil
 	}
 	return m, nil
 }
@@ -255,38 +282,108 @@ func waitActionEvent(ch <-chan tea.Msg) tea.Cmd {
 }
 
 func (m Model) inputMode() InputMode {
-	return Options{
-		MemPath:         m.memPath,
-		BannerFile:      m.bannerFile,
-		DebugPackage:    m.debugPackage,
-		DebugPackageURL: m.debugPackageURL,
-		RepoURL:         m.repoURL,
-		VMLinuxPath:     m.vmlinuxPath,
-		Kernel:          m.kernel,
-		PackageVersion:  m.packageVersion,
-	}.InputMode()
+	if validInputMode(m.inputModeValue) {
+		return m.inputModeValue
+	}
+	return m.detectInputMode()
 }
 
 func (m Model) View() string {
 	if m.width == 0 {
 		return "initializing..."
 	}
+	if m.compactViewMode() {
+		return m.compactView()
+	}
 	logo := renderCompactLogo(m.width)
 	bar := m.commandBar()
-	bodyHeight := max(3, m.height-lipgloss.Height(logo)-lipgloss.Height(bar))
+	bodyHeight := max(0, m.height-lipgloss.Height(logo)-lipgloss.Height(bar))
 	body := m.renderBody(bodyHeight)
-	return lipgloss.JoinVertical(lipgloss.Left, logo, body, bar)
+	return trimViewHeight(lipgloss.JoinVertical(lipgloss.Left, logo, body, bar), m.height)
+}
+
+func (m Model) compactViewMode() bool {
+	return (m.height > 0 && m.height <= compactHeightLimit) || (m.width > 0 && m.width < compactWidthLimit)
+}
+
+func (m Model) compactView() string {
+	bar := m.compactCommandBar()
+	bodyHeight := max(0, m.height-lipgloss.Height(bar))
+	body := m.compactLogView(bodyHeight, max(1, m.width))
+	return trimViewHeight(lipgloss.JoinVertical(lipgloss.Left, body, bar), m.height)
+}
+
+func (m Model) compactLogView(height, width int) string {
+	if height <= 0 {
+		return ""
+	}
+	rows := []string{m.compactStatusLine(width)}
+	logRows := m.visibleLogLines(max(0, height-len(rows)), width)
+	rows = append(rows, logRows...)
+	return trimRows(rows, height)
+}
+
+func (m Model) compactStatusLine(width int) string {
+	if width < lipgloss.Width("MEOW") {
+		return logoStyle.Render(truncateLine("MEOW", width))
+	}
+	logo := renderGradientText("MEOW")
+	status := "[OK] idle"
+	if m.running {
+		status = "[RUN] " + string(m.runningAction)
+	}
+	tail := fmt.Sprintf(" %s mode:%s plugin:%s", status, m.inputMode(), shortValue(m.plugin))
+	if m.logScroll > 0 {
+		tail += fmt.Sprintf(" scroll +%d", min(m.logScroll, m.maxLogScroll()))
+	}
+	remainingWidth := width - lipgloss.Width(logo)
+	if remainingWidth <= 0 {
+		return logo
+	}
+	tail = clipLine(tail, remainingWidth)
+	return logo + mutedStyle.Render(tail)
 }
 
 func renderCompactLogo(width int) string {
-	title := "MEOW - Linux Symbol Builder"
-	if width < 70 {
-		return logoStyle.Render(title)
+	if width < lipgloss.Width("MEOW") {
+		return logoStyle.Render(truncateLine("MEOW", width))
 	}
-	return logoStyle.Render("MEOW") + mutedStyle.Render("  Linux Symbol Builder")
+	title := renderGradientText("MEOW") + mutedStyle.Render(" - Linux Symbol Builder")
+	if width < 70 {
+		return renderGradientText("MEOW")
+	}
+	return title
+}
+
+func renderGradientText(text string) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	out := strings.Builder{}
+	total := max(1, len(runes)-1)
+	for i, r := range runes {
+		t := float64(i) / float64(total)
+		red := lerpInt(96, 167, t)
+		green := lerpInt(165, 139, t)
+		blue := lerpInt(250, 250, t)
+		color := lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", red, green, blue))
+		out.WriteString(lipgloss.NewStyle().Bold(true).Foreground(color).Render(string(r)))
+	}
+	return out.String()
+}
+
+func lerpInt(a, b int, t float64) int {
+	return a + int(float64(b-a)*t)
 }
 
 func (m Model) renderBody(height int) string {
+	if height <= 0 {
+		return ""
+	}
+	if height < logOnlyBodyLimit {
+		return m.centerPanel(max(1, m.width), height)
+	}
 	switch {
 	case m.width >= 100:
 		leftW := 31
@@ -303,11 +400,12 @@ func (m Model) renderBody(height int) string {
 		centerW := max(20, m.width-leftW-1)
 		return lipgloss.JoinHorizontal(lipgloss.Top, m.leftPanel(leftW, height), m.centerPanel(centerW, height))
 	default:
-		return m.centerPanel(max(20, m.width), height)
+		return m.centerPanel(max(1, m.width), height)
 	}
 }
 
 func (m Model) leftPanel(width, height int) string {
+	contentHeight := panelContentHeight(height)
 	rows := []string{
 		titleStyle.Render("Input"),
 		labelStyle.Render("mode: ") + valueStyle.Render(string(m.inputMode())),
@@ -332,11 +430,24 @@ func (m Model) leftPanel(width, height int) string {
 	} else {
 		rows = append(rows, "", mutedStyle.Render("[OK] idle"))
 	}
-	return panelStyle.Width(width).Height(height).Render(trimRows(rows, height-2))
+	return renderPanel(width, height, trimRows(rows, contentHeight))
 }
 
 func (m Model) centerPanel(width, height int) string {
-	rows := []string{titleStyle.Render("Workflow / Logs")}
+	contentHeight := panelContentHeight(height)
+	rows := m.workflowHeaderRows(min(m.logScroll, m.maxLogScrollForContent(contentHeight)), contentHeight)
+	maxLogLines := max(0, contentHeight-len(rows))
+	logLines := m.visibleLogLines(maxLogLines, panelContentWidth(width))
+	rows = append(rows, logLines...)
+	return renderPanel(width, height, trimRows(rows, contentHeight))
+}
+
+func (m Model) workflowHeaderRows(scroll, maxRows int) []string {
+	title := "Workflow / Logs"
+	if scroll > 0 {
+		title += mutedStyle.Render(fmt.Sprintf("  scroll +%d", scroll))
+	}
+	rows := []string{titleStyle.Render(title)}
 	if m.lastPreflightResult != nil {
 		rows = append(rows, successStyle.Render("[OK] preflight: "+summaryLine(m.lastPreflightResult)))
 	}
@@ -352,17 +463,49 @@ func (m Model) centerPanel(width, height int) string {
 		}
 		rows = append(rows, style.Render(status+" verify"))
 	}
-	rows = append(rows, "")
-	logLines := m.logs.RenderLines()
-	maxLogLines := max(1, height-len(rows)-2)
-	if len(logLines) > maxLogLines {
-		logLines = logLines[len(logLines)-maxLogLines:]
+	if maxRows > len(rows)+1 {
+		rows = append(rows, "")
 	}
-	rows = append(rows, logLines...)
-	return panelStyle.Width(width).Height(height).Render(trimRows(rows, height-2))
+	return rows
+}
+
+func (m Model) visibleLogLines(limit, width int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	entries := m.logs.Entries()
+	if len(entries) == 0 {
+		return nil
+	}
+	maxOffset := max(0, len(entries)-limit)
+	offset := min(m.logScroll, maxOffset)
+	if offset < 0 {
+		offset = 0
+	}
+	end := len(entries) - offset
+	start := max(0, end-limit)
+	return renderLogEntries(entries[start:end], width)
+}
+
+func renderLogEntries(entries []LogEntry, width int) []string {
+	lines := make([]string, 0, len(entries))
+	width = max(1, width)
+	for _, entry := range entries {
+		prefix := fmt.Sprintf("[%s] ", entry.Time)
+		line := prefix
+		if lipgloss.Width(prefix) >= width {
+			line = clipLine(prefix, width)
+		} else {
+			messageWidth := width - lipgloss.Width(prefix)
+			line += clipLine(entry.Message, messageWidth)
+		}
+		lines = append(lines, logColor(entry.Level).Render(line))
+	}
+	return lines
 }
 
 func (m Model) rightPanel(width, height int) string {
+	contentHeight := panelContentHeight(height)
 	rows := []string{
 		titleStyle.Render("Plugin / Results"),
 		labelStyle.Render("plugin: ") + valueStyle.Render(shortValue(m.plugin)),
@@ -398,7 +541,7 @@ func (m Model) rightPanel(width, height int) string {
 			rows = append(rows, mutedStyle.Render(prefix)+valueStyle.Render(plugin.Name))
 		}
 	}
-	return panelStyle.Width(width).Height(height).Render(trimRows(rows, height-2))
+	return renderPanel(width, height, trimRows(rows, contentHeight))
 }
 
 func (m Model) commandBar() string {
@@ -406,7 +549,79 @@ func (m Model) commandBar() string {
 	if m.inputFocused {
 		hint = "enter submit | esc cancel"
 	}
-	return inactiveBorder.Width(max(20, m.width-2)).Render(" > " + m.input.View() + "  " + mutedStyle.Render(hint))
+	contentWidth := max(1, m.width-2)
+	prefix := " > "
+	inputWidth := max(1, contentWidth-lipgloss.Width(prefix)-lipgloss.Width(hint)-2)
+	m.input.Width = inputWidth
+	content := prefix + m.input.View()
+	if lipgloss.Width(content)+2+lipgloss.Width(hint) <= contentWidth {
+		content += "  " + mutedStyle.Render(hint)
+	}
+	return inactiveBorder.Width(contentWidth).Render(content)
+}
+
+func (m Model) compactCommandBar() string {
+	width := max(1, m.width)
+	hint := " i/r/x/q"
+	if m.inputFocused {
+		hint = " enter/esc"
+	}
+	prefix := ">"
+	inputWidth := max(1, width-lipgloss.Width(prefix)-lipgloss.Width(hint)-1)
+	m.input.Width = inputWidth
+	content := prefix + m.input.View()
+	if lipgloss.Width(content)+lipgloss.Width(hint) <= width {
+		content += mutedStyle.Render(hint)
+	}
+	return clipLine(content, width)
+}
+
+func renderPanel(width, height int, content string) string {
+	contentWidth := panelContentWidth(width)
+	return panelStyle.
+		Width(contentWidth).
+		Height(panelContentHeight(height)).
+		Render(content)
+}
+
+func panelContentWidth(width int) int {
+	return max(1, width-4)
+}
+
+func panelContentHeight(height int) int {
+	return max(0, height-2)
+}
+
+func (m Model) logVisibleRows() int {
+	if m.compactViewMode() {
+		bodyHeight := max(0, m.height-lipgloss.Height(m.compactCommandBar()))
+		return max(0, bodyHeight-1)
+	}
+	logoHeight := lipgloss.Height(renderCompactLogo(m.width))
+	barHeight := lipgloss.Height(m.commandBar())
+	bodyHeight := max(0, m.height-logoHeight-barHeight)
+	contentHeight := panelContentHeight(bodyHeight)
+	return max(0, contentHeight-len(m.workflowHeaderRows(0, contentHeight)))
+}
+
+func (m Model) maxLogScroll() int {
+	return max(0, len(m.logs.Entries())-max(1, m.logVisibleRows()))
+}
+
+func (m Model) maxLogScrollForContent(contentHeight int) int {
+	visible := max(1, contentHeight-len(m.workflowHeaderRows(0, contentHeight)))
+	return max(0, len(m.logs.Entries())-visible)
+}
+
+func (m *Model) scrollLogs(delta int) {
+	m.logScroll += delta
+	if m.logScroll < 0 {
+		m.logScroll = 0
+	}
+	maxScroll := m.maxLogScroll()
+	if m.logScroll > maxScroll {
+		m.logScroll = maxScroll
+	}
 }
 
 func trimRows(rows []string, maxRows int) string {
@@ -417,6 +632,58 @@ func trimRows(rows []string, maxRows int) string {
 		rows = rows[:maxRows]
 	}
 	return strings.Join(rows, "\n")
+}
+
+func clipLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(line) <= width {
+		return line
+	}
+	if width <= lipgloss.Width("...") {
+		return strings.Repeat(".", width)
+	}
+	runes := []rune(line)
+	out := strings.Builder{}
+	for _, r := range runes {
+		next := out.String() + string(r)
+		if lipgloss.Width(next+"...") > width {
+			break
+		}
+		out.WriteRune(r)
+	}
+	return out.String() + "..."
+}
+
+func truncateLine(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(line) <= width {
+		return line
+	}
+	runes := []rune(line)
+	out := strings.Builder{}
+	for _, r := range runes {
+		next := out.String() + string(r)
+		if lipgloss.Width(next) > width {
+			break
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+func trimViewHeight(view string, maxHeight int) string {
+	if maxHeight <= 0 {
+		return ""
+	}
+	lines := strings.Split(view, "\n")
+	if len(lines) > maxHeight {
+		lines = lines[:maxHeight]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func shortValue(value string) string {
@@ -451,6 +718,13 @@ func firstNonEmpty(values ...string) string {
 
 func max(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

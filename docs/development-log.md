@@ -1,5 +1,29 @@
 # meow Development Log
 
+## 2026-06-09  TUI short panel layout hardening
+
+### Changes
+- Raised the short-height layout threshold so `height <= 18` uses a borderless compact, log-first view.
+- Added narrow-width compact mode for `width < 40` to prevent forced panel widths from wrapping in the terminal.
+- Kept the gradient `MEOW` brand mark in normal/compact views and truncate only on extremely narrow widths.
+- Added log history scrolling with visible scroll state and clipped long log lines before styling.
+
+### Validation
+- `go test ./internal/tui -run "TestView|TestLogScroll" -count=1 -v` covers short heights, narrow widths, long-line clipping, and scroll navigation.
+
+## 2026-06-09  TUI command surface hardening
+
+### Changes
+- Added explicit TUI source state via `/mode` and `/source`.
+- Source-setting commands now switch the active build source; `/unset` can remove stale fields and re-detect the source.
+- Added `/reset inputs`, `/reset all`, `/symbols`, `/distro`, `/kernel`, `/pkgver`, `/arch`, and `/no-remote-symbols` aliases.
+- Build argument construction now passes manual overrides through all source modes.
+- Added local TUI preflight validation for missing source fields before spawning `meow --json build`.
+- Added `meow tui --source`, `--plugin`, and repeatable `--plugin-arg` startup presets.
+
+### Validation
+- Focused `go test ./internal/tui -count=1 -v` and `go test ./cmd -run "Test(TUI|ApplyTUI)" -count=1 -v` passed at package level; local Windows cleanup may still report a test binary unlink lock after `ok`.
+
 ## 2026-06-08  TUI 主线收敛
 
 ### Go TUI 工程化改造

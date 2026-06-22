@@ -222,6 +222,14 @@ Bottom: command bar, i focus input, r run, x cancel, q quit
 
 TUI 使用压缩标题，状态符统一为 ASCII：`[OK]`、`[ERR]`、`[WARN]`、`[RUN]`，降低终端宽度差异导致的错位风险。
 
+短面板优先保证可操作性而不是面板完整性：
+
+- `height <= 18` 或 `width < 40`：进入 compact 模式，隐藏 logo 独立行和面板边框，仅保留一行状态、日志区和一行命令栏。
+- `19 <= height < 22`：隐藏左右栏，仅渲染 `Workflow / Logs` 中心面板。
+- 常规高度：按上面的三栏/双栏/单栏宽度规则渲染。
+- 日志默认贴底显示最新输出，`up/down`、`k/j`、`pgup/pgdown`、`home/end` 可滚动历史日志。
+- 长日志行在渲染前按当前可用宽度裁剪，避免终端自动换行造成纵向溢出。
+
 ### 3.3 状态管理
 
 `internal/tui.Model` 是唯一运行状态，包含路径配置、input mode、running action、cancel function、日志和最近结果。最近结果只保存 CLI JSON 的最小字段：`DoctorCheck`、`BuildSummary`、`VerifySummary`、`CacheEntry`。
@@ -231,15 +239,17 @@ TUI 使用压缩标题，状态符统一为 ASCII：`[OK]`、`[ERR]`、`[WARN]`�
 用户输入以 `/` 开头，参数解析支持单/双引号路径，未闭合引号直接报错。核心命令：
 
 ```
+/mode <source> | /source <source>
 /mem <path> | /banner-file <path> | /debug-package <path>
 /debug-package-url <url> | /repo-url <url> | /vmlinux <path>
 /manual --distro <name> --kernel <release> --pkgver <version> [--arch <arch>]
-/symbol <path> | /out <dir> | /cache-dir <dir> | /symbol-sources <path>
+/distro <name> | /kernel <release> | /pkgver <version> | /arch <arch>
+/symbol[s] <path> | /out <dir> | /cache-dir <dir> | /symbol-sources <path>
 /vol <path> | /meow <path> | /plugin <name> | /plugin-args [args...]
-/remote on|off | /force on|off
+/remote on|off | /no-remote-symbols on|off | /force on|off
 /doctor | /preflight | /build | /verify | /run | /workflow
 /cache list | /cache clear --confirm [--force]
-/clear | /help
+/unset <field> | /reset inputs|all | /clear | /help
 ```
 
 `/cache clear` 必须显式带 `--confirm`，需要强制清理时再加 `--force`。
